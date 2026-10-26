@@ -124,7 +124,6 @@ class SpeechBubble(QWidget):
         self._outer.setSpacing(6)
         self.label = QLabel(self)
         self.label.setWordWrap(True)
-        self.label.setMaximumWidth(340)
         self._outer.addWidget(self.label)
         self._row = QHBoxLayout()
         self._row.setSpacing(8)
@@ -155,6 +154,11 @@ class SpeechBubble(QWidget):
                 button.setCursor(Qt.PointingHandCursor)
                 button.clicked.connect(lambda _=False, opt=option: self._pick(opt))
                 self._row.addWidget(button)
+        # QLabel 带 wordWrap 时 sizeHint 不可靠（长文本给"单行理想宽"塌成
+        # 竖排窄条）：先按 320 逻辑列宽算出换行后的真实高度，再定尺寸
+        self.label.setFixedWidth(320)
+        hint = self.label.heightForWidth(320)
+        self.label.setFixedHeight(hint if hint and hint > 0 else self.label.sizeHint().height())
         self.adjustSize()
         self.show()
         # 审批/提问不自动消失（用户在决策）；普通说话按长度定时
