@@ -23,8 +23,8 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, QPointF, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QMouseEvent, QPainter, QRegion
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtGui import QCursor, QMouseEvent, QPainter, QRegion
+from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -184,6 +184,7 @@ class PetWindow(QWidget):
         self._mouse_grab = False
         self._press_global: QPoint | None = None
         self._drag_committed = False
+        self._piercing = False
         self._active_interaction: tuple[http_control._PendingInteraction, list[str]] | None = None
 
         self.operations = PetOperations(self)
@@ -199,6 +200,13 @@ class PetWindow(QWidget):
         tick.setInterval(16)
         tick.timeout.connect(self._tick)
         tick.start()
+
+        # 逐像素穿透轮询（旧 overlay 穿透控制的轻量版）：光标不在宠的不透明
+        # 像素上时整窗穿透——窗内透明区域不再吞桌面点击
+        pierce = QTimer(self)
+        pierce.setInterval(60)
+        pierce.timeout.connect(self._update_pierce)
+        pierce.start()
 
     # -- operations wiring ------------------------------------------------
     def _wire_operations(self) -> None:
@@ -313,11 +321,72 @@ class PetWindow(QWidget):
             running = clip is not None and bool(getattr(clip, "isRunning", lambda: False)())
             if self.sprite._clip_name != want or not running:
                 self.play(want)
-        # 注：不做"窗随宠移"。试验版（挪窗+局部坐标反向补偿）与行为链的
-        # 局部坐标移动目标形成正反馈，窗口被一路拖出屏幕（实测 -21726,-8781）。
-        # 全桌面漫游要等 overlay 式全屏窗（含点击穿透），壳层先 confined 在
-        # 窗口工作区内——稳定可证。
+        # 窗随宠移只在**拖拽会话内**启用：行为链的移动目标是窗口局部坐标，
+        # 自主漫游期间挪窗会形成正反馈棘轮（试验版窗口被拖出屏幕）——拖拽的
+        # 位置由鼠标驱动，没有那个反馈源，挪窗是安全的。
+        if self._drag_committed:
+            self._follow_drag_window()
         self._publish_snapshot()
+
+    # -- 窗随宠移（仅拖拽会话）与穿透 --------------------------------------
+    def _follow_drag_window(self) -> None:
+        """拖拽中宠到窗缘就挪窗跟随，活动范围由此跨出窗口。
+
+        窗口移动 + sprite 局部坐标反向补偿 = 宠的屏幕位置本 tick 不动，下一
+        个鼠标事件继续追光标。窗口钳在屏内——绝不重蹈出屏覆辙。
+        """
+        rect = self.sprite.rect()
+        margin = 140
+        dx = dy = 0
+        if rect.left() < margin:
+            dx = rect.left() - margin
+        elif rect.right() > self.width() - margin:
+            dx = rect.right() - (self.width() - margin)
+        if rect.top() < margin:
+            dy = rect.top() - margin
+        elif rect.bottom() > self.height() - margin:
+            dy = rect.bottom() - (self.height() - margin)
+        if dx == 0 and dy == 0:
+            return
+        geo = self.geometry()
+        screen = self.screen().availableGeometry() if self.screen() else None
+        nx, ny = geo.x() + dx, geo.y() + dy
+        if screen is not None:
+            nx = max(screen.left(), min(nx, screen.right() - self.width() + 1))
+            ny = max(screen.top(), min(ny, screen.bottom() - self.height() + 1))
+        if nx == geo.x() and ny == geo.y():
+            return
+        self.move(nx, ny)
+        self.sprite.set_pos(self.sprite.pos - QPointF(nx - geo.x(), ny - geo.y()))
+
+    def _update_pierce(self) -> None:
+        """逐像素穿透轮询：光标不在宠身上且未拖拽 → 整窗让出鼠标。"""
+        if self._drag_committed or self._mouse_grab:
+            self._set_pierce(False)
+            return
+        if QApplication.activePopupWidget() is not None:
+            return  # 右键菜单开着，别动穿透态
+        if not self.isVisible():
+            return
+        gpos = QCursor.pos()
+        origin = self.geometry().topLeft()
+        local = QPoint(int(gpos.x() - origin.x()), int(gpos.y() - origin.y()))
+        inside = 0 <= local.x() < self.width() and 0 <= local.y() < self.height()
+        self._set_pierce(not (inside and self._hit_sprite(local)))
+
+    def _set_pierce(self, pierce: bool) -> None:
+        if self._piercing == pierce:
+            return
+        self._piercing = pierce
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, pierce)
+
+    # -- 右键菜单 ----------------------------------------------------------
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        menu = QMenu(self)
+        act_quit = menu.addAction("退出")
+        chosen = menu.exec(event.globalPos())
+        if chosen is act_quit:
+            self.close()
 
     def _publish_snapshot(self) -> None:
         control_state = getattr(self, "_control_state", None)

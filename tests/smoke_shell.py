@@ -30,6 +30,13 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from pet.http_control import ControlState, serve  # noqa: E402
 
 app = QApplication([])
+# 定时器/信号槽里的异常不会打断事件循环也不会让进程退出——冒烟必须显式收集
+slot_errors: list[str] = []
+_prev_hook = sys.excepthook
+def _hook(t, v, tb):
+    slot_errors.append(f"{t.__name__}: {v}")
+    _prev_hook(t, v, tb)
+sys.excepthook = _hook
 window = petmain.PetWindow()
 cs = ControlState()
 window._control_state = cs
@@ -125,6 +132,7 @@ def finish() -> None:
         "answered on GUI thread": phase["answered"],
         "drag moves sprite": results.get("drag_moved") is True,
         "sprite pixels composited": opaque > 50,
+        "no slot exceptions": not slot_errors,
         "no driver error": "error" not in results,
     }
     failed = [key for key, ok in checks.items() if not ok]
