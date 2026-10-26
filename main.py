@@ -167,8 +167,8 @@ class PetWindow(QWidget):
         self.bubble = SpeechBubble(self)
 
         # 仿真控制器组（screen_host 的单宠版）：行为链（游走/转向/随机动作）
-        # + 抛掷物理，域 = 窗口局部工作区；宠走到窗缘由 _follow_sprite_window
-        # 挪窗跟随。碰撞世界单宠无意义，不装。
+        # + 抛掷物理，域 = 窗口局部工作区（宠 confined 在窗内，见 _tick 注）。
+        # 碰撞世界单宠无意义，不装。
         self.behavior = BehaviorController(QRect(0, 0, self.width(), self.height()))
         self.physics = ThrowPhysicsController(self.behavior.bounds)
         self.sprite.set_bounds(QRect(0, 0, self.width(), self.height()))
@@ -282,7 +282,6 @@ class PetWindow(QWidget):
             self.behavior.tick([self.sprite], dt)
         self.physics.tick([self.sprite], dt)
         self.sprite.advance(dt)
-        self._follow_sprite_window()
         if self._one_shot is not None:
             clip = self.sprite._clip
             if clip is None or not getattr(clip, "isRunning", lambda: False)():
@@ -302,30 +301,11 @@ class PetWindow(QWidget):
             running = clip is not None and bool(getattr(clip, "isRunning", lambda: False)())
             if self.sprite._clip_name != want or not running:
                 self.play(want)
+        # 注：不做"窗随宠移"。试验版（挪窗+局部坐标反向补偿）与行为链的
+        # 局部坐标移动目标形成正反馈，窗口被一路拖出屏幕（实测 -21726,-8781）。
+        # 全桌面漫游要等 overlay 式全屏窗（含点击穿透），壳层先 confined 在
+        # 窗口工作区内——稳定可证。
         self._publish_snapshot()
-
-    # -- 窗随宠移 ----------------------------------------------------------
-    def _follow_sprite_window(self) -> None:
-        """宠走到窗缘就挪窗跟随（旧 window.py 搬窗语义的单宠简化版）。
-
-        窗口移动 + sprite 局部坐标反向补偿 = 宠的屏幕位置本 tick 不动；
-        下一 tick 行为链/鼠标继续积分，宠就跨过初始 460x400 的窗界。
-        """
-        rect = self.sprite.rect()
-        margin = 60
-        dx = dy = 0
-        if rect.left() < margin:
-            dx = rect.left() - margin
-        elif rect.right() > self.width() - margin:
-            dx = rect.right() - (self.width() - margin)
-        if rect.top() < margin:
-            dy = rect.top() - margin
-        elif rect.bottom() > self.height() - margin:
-            dy = rect.bottom() - (self.height() - margin)
-        if dx == 0 and dy == 0:
-            return
-        self.move(self.geometry().x() + dx, self.geometry().y() + dy)
-        self.sprite.set_pos(self.sprite.pos - QPointF(dx, dy))
 
     def _publish_snapshot(self) -> None:
         control_state = getattr(self, "_control_state", None)
