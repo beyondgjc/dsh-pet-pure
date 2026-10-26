@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import main as petmain  # noqa: E402
-from PySide6.QtCore import QPoint, QTimer  # noqa: E402
+from PySide6.QtCore import QPoint, QPointF, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from pet.http_control import ControlState, serve  # noqa: E402
 
@@ -92,6 +92,16 @@ def touch_pet() -> None:
 
 def finish() -> None:
     timer.stop()
+    # 合成拖拽（不经鼠标）：on_press 设偏移 → begin_drag → on_move →
+    # advance 积分应移动 sprite——grab 协议断了（如漏 on_press）在这里抓
+    pos0 = QPointF(window.sprite.pos)
+    window.sprite.on_press(QPointF(pos0.x() + 5, pos0.y() + 5))
+    window.sprite.begin_drag()
+    window.sprite.on_move(QPointF(pos0.x() + 60, pos0.y() + 40))
+    for _ in range(15):
+        window.sprite.advance(1 / 60)
+    results["drag_moved"] = window.sprite.pos != pos0
+    window.sprite.on_release(QPointF(window.sprite.pos))
     # 像素级验收：grab 强制走一遍 paintEvent → sprite.paint → _rebuild_pixmap，
     # 采样非透明像素——正是"协议全绿但窗口全透明"这类断链的唯一探测器。
     image = window.grab().toImage()
@@ -113,6 +123,7 @@ def finish() -> None:
         "interaction.answer": results.get("interaction") == {"ok": True, "answer": "allowed-once"},
         "touch event": "touch" in results.get("events", []),
         "answered on GUI thread": phase["answered"],
+        "drag moves sprite": results.get("drag_moved") is True,
         "sprite pixels composited": opaque > 50,
         "no driver error": "error" not in results,
     }

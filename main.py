@@ -22,7 +22,7 @@ import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPointF, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QPoint, QPointF, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QMouseEvent, QPainter, QRegion
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -33,6 +33,8 @@ from pet import catalog, http_control  # noqa: E402
 from pet.http_control import ControlState, Operations, random_interaction_id  # noqa: E402
 from pet.library import MovieLibrary  # noqa: E402
 from pet.pet_sprite import PetSprite  # noqa: E402
+from pet.sprite_behavior import BehaviorController  # noqa: E402
+from pet.sprite_physics import ThrowPhysicsController  # noqa: E402
 
 # Semantic state -> animation name (the pet's own vocabulary).
 STATE_ANIMATION = {
@@ -54,6 +56,8 @@ TOUCH_REACTIONS = [
 # manifest.json's boxes in the 640x360 video frame.
 HEAD_BOX = (185, 60, 436, 195)
 BODY_BOX = (212, 60, 428, 330)
+# 逐像素命中阈值（旧 overlay_window.ALPHA_HIT_THRESHOLD 同值）。
+ALPHA_HIT_THRESHOLD = 16
 
 
 def resolve_assets_root() -> Path:
@@ -162,10 +166,20 @@ class PetWindow(QWidget):
         self.sprite._dirty_cb = _on_sprite_dirty
         self.bubble = SpeechBubble(self)
 
+        # 仿真控制器组（screen_host 的单宠版）：行为链（游走/转向/随机动作）
+        # + 抛掷物理，域 = 窗口局部工作区；宠走到窗缘由 _follow_sprite_window
+        # 挪窗跟随。碰撞世界单宠无意义，不装。
+        self.behavior = BehaviorController(QRect(0, 0, self.width(), self.height()))
+        self.physics = ThrowPhysicsController(self.behavior.bounds)
+        self.sprite.set_bounds(QRect(0, 0, self.width(), self.height()))
+
         self.state = "idle"
         self._one_shot: str | None = None
         self._error_until = 0.0
-        self._mouse_down_at: tuple[float, float, float] | None = None
+        # 鼠标会话（旧 overlay 的 grab 协议）：按下=点击候选，过阈值才升级
+        self._mouse_grab = False
+        self._press_global: QPoint | None = None
+        self._drag_committed = False
         self._active_interaction: tuple[http_control._PendingInteraction, list[str]] | None = None
 
         self.operations = PetOperations(self)
@@ -195,6 +209,8 @@ class PetWindow(QWidget):
     def play(self, name: str, one_shot: bool = False) -> None:
         if one_shot:
             self._one_shot = name
+            # 一次性播放打断行为链：内部状态作废，播完由 tick 重新掷骰
+            self.behavior.forget(self.sprite)
         if self.sprite.bind_clip(name):
             return
         # Missing animation is non-fatal; the state machine keeps running.
@@ -203,6 +219,9 @@ class PetWindow(QWidget):
     def _on_state(self, state: str) -> None:
         finished_work = self.state == "working" and state == "idle"
         self.state = state
+        # 语义状态切换：行为链内部状态作废（working/thinking 期间它不 tick，
+        # 旧计划留着会在回 idle 时瞬间执行）
+        self.behavior.forget(self.sprite)
         if state == "error":
             self._error_until = self._monotonic() + 6.0
         if finished_work:
@@ -255,19 +274,58 @@ class PetWindow(QWidget):
         return time.monotonic()
 
     def _tick(self) -> None:
-        self.sprite.advance(1 / 60)
+        dt = 1 / 60
+        error_active = self._error_until > self._monotonic()
+        if self.state == "idle" and self._one_shot is None and not error_active:
+            # 行为链只在待机跑（working/thinking 持状态动画、error 持受惊）；
+            # drag/thrown 时它内部只接管画面，位置归鼠标/物理
+            self.behavior.tick([self.sprite], dt)
+        self.physics.tick([self.sprite], dt)
+        self.sprite.advance(dt)
+        self._follow_sprite_window()
         if self._one_shot is not None:
             clip = self.sprite._clip
             if clip is None or not getattr(clip, "isRunning", lambda: False)():
                 self._one_shot = None
-                self.play(STATE_ANIMATION[self.state])
-        elif self._error_until > self._monotonic():
+                if self.state != "idle":
+                    self.play(STATE_ANIMATION[self.state])
+        elif error_active:
             # Rebinding every tick would restart the clip from frame 0
             # (bind_clip stops the old clip unconditionally), freezing the
             # animation — only enter it when something else is playing.
             if self.sprite._clip_name != "被吓一跳":
                 self.play("被吓一跳")
+        elif self.state != "idle":
+            # 状态动画循环持住：被意外打断（clip 停了/被换）就回位
+            want = STATE_ANIMATION[self.state]
+            clip = self.sprite._clip
+            running = clip is not None and bool(getattr(clip, "isRunning", lambda: False)())
+            if self.sprite._clip_name != want or not running:
+                self.play(want)
         self._publish_snapshot()
+
+    # -- 窗随宠移 ----------------------------------------------------------
+    def _follow_sprite_window(self) -> None:
+        """宠走到窗缘就挪窗跟随（旧 window.py 搬窗语义的单宠简化版）。
+
+        窗口移动 + sprite 局部坐标反向补偿 = 宠的屏幕位置本 tick 不动；
+        下一 tick 行为链/鼠标继续积分，宠就跨过初始 460x400 的窗界。
+        """
+        rect = self.sprite.rect()
+        margin = 60
+        dx = dy = 0
+        if rect.left() < margin:
+            dx = rect.left() - margin
+        elif rect.right() > self.width() - margin:
+            dx = rect.right() - (self.width() - margin)
+        if rect.top() < margin:
+            dy = rect.top() - margin
+        elif rect.bottom() > self.height() - margin:
+            dy = rect.bottom() - (self.height() - margin)
+        if dx == 0 and dy == 0:
+            return
+        self.move(self.geometry().x() + dx, self.geometry().y() + dy)
+        self.sprite.set_pos(self.sprite.pos - QPointF(dx, dy))
 
     def _publish_snapshot(self) -> None:
         control_state = getattr(self, "_control_state", None)
@@ -288,24 +346,56 @@ class PetWindow(QWidget):
         })
 
     # -- input -------------------------------------------------------------
+    def _hit_sprite(self, local: QPoint) -> bool:
+        """旧 overlay.sprite_at 的单宠版：绘制外接矩形粗筛 + alpha 细判。"""
+        bounds = (self.sprite.paint_bounds()
+                  if hasattr(self.sprite, "paint_bounds") else self.sprite.rect())
+        if not bounds.contains(local):
+            return False
+        rect = self.sprite.rect()
+        alpha = self.sprite.alpha_at(QPoint(local.x() - rect.x(), local.y() - rect.y()))
+        return alpha >= ALPHA_HIT_THRESHOLD
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.LeftButton:
-            self._mouse_down_at = (event.globalPosition().x(), event.globalPosition().y(), self._monotonic())
-            self.sprite.on_move(event.scenePosition().toPoint() if hasattr(event, "scenePosition") else event.position().toPoint())
+        if event.button() == Qt.LeftButton and self._hit_sprite(event.position().toPoint()):
+            # 按下只是点击候选（不置拖拽态）：过了阈值才 begin_drag 升级，
+            # 否则每次点击都会闪悬空姿态（旧 overlay 同款协议）
+            self._mouse_grab = True
+            self._press_global = event.globalPosition().toPoint()
+            self._drag_committed = False
+            self.sprite.on_press(QPointF(event.position()))
+            event.accept()
+            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._mouse_down_at is not None:
-            self.sprite.on_move(event.position().toPoint())
+        if self._mouse_grab:
+            if not self._drag_committed and self._press_global is not None:
+                threshold = catalog.DRAG_THRESHOLD * self.sprite.scale
+                delta = event.globalPosition().toPoint() - self._press_global
+                if delta.manhattanLength() >= threshold:
+                    self._drag_committed = True
+                    self.sprite.begin_drag()
+                    self.behavior.on_drag_started(self.sprite)
+            self.sprite.on_move(QPointF(event.position()))
+            event.accept()
+            return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.LeftButton and self._mouse_down_at is not None:
-            down_x, down_y, down_at = self._mouse_down_at
-            self._mouse_down_at = None
-            distance = (event.globalPosition().x() - down_x) ** 2 + (event.globalPosition().y() - down_y) ** 2
-            if distance <= 25 and self._monotonic() - down_at <= 0.5:
+        if event.button() == Qt.LeftButton and self._mouse_grab:
+            self._mouse_grab = False
+            committed = self._drag_committed
+            self._drag_committed = False
+            self._press_global = None
+            if committed:
+                # 真拖拽松手：按轨迹判甩出（thrown→物理接管）或原地放下
+                self.sprite.on_release(QPointF(event.position()))
+                self.behavior.on_drag_released(self.sprite)
+            else:
                 self._handle_touch(event.position().toPoint())
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event) -> None:
@@ -322,7 +412,10 @@ class PetWindow(QWidget):
 
     def _handle_touch(self, local: QPoint) -> None:
         import random
-        self.play(random.choice(TOUCH_REACTIONS), one_shot=True)
+        # 点击反应走行为链的 click 池（链管理：播完自动回掷骰；working 等
+        # 非 normal 态返回 False）；池不可用再退一次性播放
+        if not self.behavior.on_sprite_clicked(self.sprite):
+            self.play(random.choice(TOUCH_REACTIONS), one_shot=True)
         # Translate the click into the 640x360 video frame.
         rect = self.sprite.rect()
         scale = min(rect.width() / 640, rect.height() / 360)
@@ -333,7 +426,8 @@ class PetWindow(QWidget):
             part = "head"
         elif BODY_BOX[0] <= video_x <= BODY_BOX[2] and BODY_BOX[1] <= video_y <= BODY_BOX[3]:
             part = "body"
-        self._control_state.emit("touch", part=part)
+        if getattr(self, "_control_state", None) is not None:
+            self._control_state.emit("touch", part=part)
         print(f"[pet-pure] touch ({part})")
 
     def _answer_interaction(self, answer: str) -> None:
