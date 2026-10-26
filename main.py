@@ -451,6 +451,14 @@ class PetWindow(QWidget):
         super().closeEvent(event)
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)  # CPython 在 Windows 上特判 0 号信号 = 存在性探测
+        return True
+    except OSError:
+        return False
+
+
 def main() -> int:
     import faulthandler
     faulthandler.enable()
@@ -482,6 +490,17 @@ def main() -> int:
         os.environ.get("DSH_HOME") or os.path.join(os.path.expanduser("~"), ".dsh"),
         "pet-http.json",
     ))
+    # 单实例接管：同一清单上已有一只活的 python 宠就终止它（"一端口一宠物"
+    # 同源铁律）——否则重启旧壳留双窗，冻结的那只抢走拖拽和视觉。
+    try:
+        old = json.loads(state_file.read_text(encoding="utf-8"))
+        old_pid = int(old.get("pid") or 0)
+        if (old.get("pet") == "python" and old_pid and old_pid != os.getpid()
+                and _pid_alive(old_pid)):
+            os.kill(old_pid, signal.SIGTERM)
+            print(f"[pet-pure] took over from previous instance pid={old_pid}", file=sys.stderr)
+    except (OSError, ValueError):
+        pass  # 没有清单/清单损坏/进程已死：当首例启动
     try:
         state_file.parent.mkdir(parents=True, exist_ok=True)
         state_file.write_text(json.dumps({
