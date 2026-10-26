@@ -125,8 +125,9 @@ class SpeechBubble(QWidget):
         self.label.setMaximumWidth(360)
         layout.addWidget(self.label)
         self.setStyleSheet(
-            "#pet-speech-bubble { background: rgba(255,255,255,238); border: 1px solid #d8e0ea;"
-            " border-radius: 12px; } #pet-speech-bubble QLabel { color: #1c2733; font-size: 13px; }"
+            "#pet-speech-bubble { background: rgba(252,253,255,244); border: 1px solid #c9d6e3;"
+            " border-radius: 12px; }"
+            "#pet-speech-bubble QLabel { color: #1c2733; font-size: 12px; }"
         )
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -272,10 +273,11 @@ class PetWindow(QWidget):
 
     def _on_say(self, text: str) -> None:
         geometry = self.geometry()
-        x = geometry.x() + max(8, (geometry.width() - 380) // 2)
-        y = geometry.y() - 90
-        self.bubble.move(max(0, x), max(0, y))
-        self.bubble.say(text)
+        self.bubble.say(text)  # 先定尺寸再定位
+        center = self.sprite.rect().center()
+        bx = geometry.x() + center.x() - self.bubble.width() // 2
+        by = geometry.y() + max(4, self.sprite.rect().top() - self.bubble.height() - 8)
+        self.bubble.move(max(0, bx), max(0, by))
 
     def _on_interaction(self, interaction_id: str, kind: str, payload: object) -> None:
         pending, request = payload
@@ -283,15 +285,18 @@ class PetWindow(QWidget):
             questions = request.get("questions") or []
             first = questions[0] if questions else {}
             text = first.get("question") or "请选择"
-            options = [o.get("label") for o in first.get("options") or [] if o.get("label")]
-            if options:
-                text = f"{text}\n" + " / ".join(str(o) for o in options)
+            options = [str(o.get("label")) for o in first.get("options") or [] if o.get("label")]
         else:
             text = request.get("displayReason") or request.get("reason") or "请求执行"
             if isinstance(text, dict):
                 text = text.get("zh") or text.get("en") or "请求执行"
-        self._active_interaction = (pending, options if kind == "question" else ["允许", "拒绝"])
-        self._on_say(f"[{text}] — 按 1/2/… 或点击数字键选择")
+            options = ["允许", "拒绝"]
+        self._active_interaction = (pending, options)
+        lines = [str(text)]
+        if options:
+            lines.append("　".join(f"{i + 1}. {o}" for i, o in enumerate(options)))
+        lines.append("按数字键回答")
+        self._on_say("\n".join(lines))
         pending.settled.clear()
 
     def _on_cancel(self, _interaction_id: str) -> None:
@@ -444,9 +449,13 @@ class PetWindow(QWidget):
             "x": geometry.x(), "y": geometry.y(),
             "width": geometry.width(), "height": geometry.height(),
         }
+        # 字段对齐 TS 载体的 /status（pet_state 工具原样透传给模型）：
+        # animation 报文件名（.webm 后缀），override = 一次性动作覆盖
+        animation = self.sprite._clip_name
         control_state.publish_snapshot({
             "state": self.state,
-            "animation": self.sprite._clip_name,
+            "animation": f"{animation}.webm" if animation else animation,
+            "override": f"{self._one_shot}.webm" if self._one_shot else None,
             "visible": self.isVisible(),
             "interaction": self._active_interaction is not None,
         })

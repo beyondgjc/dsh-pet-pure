@@ -124,7 +124,7 @@ def finish() -> None:
                               and results.get("status0", {}).get("animation") is not None),
         "post.state ok": results.get("state") == {"ok": True},
         "status1.thinking+anim": (results.get("status1", {}).get("state") == "thinking"
-                                  and results.get("status1", {}).get("animation") == "深度思考碎碎念"),
+                                  and results.get("status1", {}).get("animation") == "深度思考碎碎念.webm"),
         "post.action ok": results.get("action") == {"ok": True},
         "post.say ok": results.get("say") == {"ok": True},
         "interaction.answer": results.get("interaction") == {"ok": True, "answer": "allowed-once"},
