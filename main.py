@@ -171,6 +171,9 @@ class PetWindow(QWidget):
         # + 抛掷物理，域 = 窗口局部工作区（宠 confined 在窗内，见 _tick 注）。
         # 碰撞世界单宠无意义，不装。
         self.behavior = BehaviorController(QRect(0, 0, self.width(), self.height()))
+        # 旧机同款 30s 动作间隔（治随机动作池"不停做动作"观感；间隔不延迟
+        # 聊天动作，待播联动优先于 gap）
+        self.behavior.animation_gap_seconds = 30.0
         self.physics = ThrowPhysicsController(self.behavior.bounds)
         self.sprite.set_bounds(QRect(0, 0, self.width(), self.height()))
 
@@ -263,6 +266,14 @@ class PetWindow(QWidget):
         self.bubble.hide()
 
     # -- frame loop -------------------------------------------------------
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        super().showEvent(event)
+        # DPR 归一化（D2，旧 overlay._feed_sprite_dpr 同款）：窗口 realize 后
+        # 按所在屏喂——150% 屏不喂 = 按逻辑像素解码再被合成器放大 → 模糊
+        screen = self.screen()
+        if screen is not None:
+            self.sprite.set_dpr(float(screen.devicePixelRatio()))
+
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
