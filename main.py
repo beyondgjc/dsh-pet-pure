@@ -638,6 +638,9 @@ def main() -> int:
                         help="identity field in the manifest; the swap test "
                              "publishes 'electron' so the existing driver "
                              "picks this pet up without driver changes")
+    parser.add_argument("--supervised", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--no-supervise", action="store_true",
+                        help="run once; do not auto-restart after a crash")
     args = parser.parse_args()
 
     if args.assets:
@@ -662,6 +665,22 @@ def main() -> int:
         print(f"[pet-pure] ---- launch pid={os.getpid()} manifest={state_file} ----", flush=True)
     except OSError:
         pass
+    if not args.supervised and not args.no_supervise:
+        # 监督模式（默认）：app.exec 里偶发原生崩溃（faulthandler 只留转储、
+        # 无细节）自动重生——换宠连续性优先，尸检照常落盘。正常退出
+        # （右键退出/Esc → code 0）不重生。
+        import subprocess
+        import time as _time
+        child_argv = [os.path.abspath(__file__),
+                      *(a for a in sys.argv[1:] if a != "--supervised"),
+                      "--supervised"]
+        while True:
+            code = subprocess.call([sys.executable, *child_argv])
+            print(f"[pet-pure] child exited code={code}", flush=True)
+            if code == 0:
+                return 0
+            print("[pet-pure] respawning in 2s", flush=True)
+            _time.sleep(2)
     # 单实例接管：同一清单上已有一只活的 python 宠就终止它（"一端口一宠物"
     # 同源铁律）——否则重启旧壳留双窗，冻结的那只抢走拖拽和视觉。
     try:
