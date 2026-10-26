@@ -51,7 +51,7 @@ class ControlState:
         # Delivered from the HTTP thread to the GUI thread via Qt signals;
         # the shell wires `handler.operations` into a QObject's slots.
         self.operations: "Operations | None" = None
-        self.window_facts: dict = {"x": 0, "y": 0, "width": 460, "height": 400}
+        self.window_facts: dict = {"x": 0, "y": 0, "width": 900, "height": 560}
 
     # -- mirror ----------------------------------------------------------
     def publish_snapshot(self, snapshot: dict) -> None:

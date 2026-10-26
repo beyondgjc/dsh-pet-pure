@@ -146,7 +146,8 @@ class PetWindow(QWidget):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.resize(460, 400)
+        # sprite 帧 461x259（scale 0.72）之外还要留漫游余量：窗太小宠永远被裁
+        self.resize(900, 560)
 
         self.library = MovieLibrary(
             parent=self,
@@ -154,7 +155,7 @@ class PetWindow(QWidget):
             asset_dir=resolve_assets_root() / catalog.DEFAULT_CHARACTER / "videos",
             prewarm_enabled=True,
         )
-        self.sprite = PetSprite(self.library, pos=QPointF(120, 40), parent=self)
+        self.sprite = PetSprite(self.library, pos=QPointF(220, 150), parent=self)
         # PetSprite 是纯 QObject 模型：像素要靠宿主的 paintEvent 画（旧
         # overlay_window 的分工）。挂脏回调——位移/帧到达直驱局部重绘，
         # 不经 tick（V-3/V-4 同款）。
