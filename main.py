@@ -247,6 +247,10 @@ class PetWindow(QWidget):
         # 旧机同款 30s 动作间隔（治随机动作池"不停做动作"观感；间隔不延迟
         # 聊天动作，待播联动优先于 gap）
         self.behavior.animation_gap_seconds = 30.0
+        # 预测预热禁用：后台解码线程与主线程 bind 竞态（idle 时 one-shot
+        # bind 间歇性原生崩，working/forget 后不崩的实测模式）。帧序列
+        # 起播本就 ~2.5ms，预热收益远小于稳定性。
+        self.behavior.predict_enabled = False
         self.physics = ThrowPhysicsController(self.behavior.bounds)
         self.sprite.set_bounds(QRect(0, 0, self.width(), self.height()))
 
@@ -313,9 +317,29 @@ class PetWindow(QWidget):
             # 一次性播放打断行为链：内部状态作废，播完由 tick 重新掷骰
             self.behavior.forget(self.sprite)
         if self.sprite.bind_clip(name):
+            # 完成检测统一走 finished 信号（FrameSeqClip 无 isRunning 方法，
+            # tick 轮询恒 False：one_shot 16ms 内被切走、状态动画被钉在
+            # 第 0 帧——两类"定住/闪没"都是它）。UniqueConnection 防同一
+            # clip 对象（library 缓存复用）重复连接。
+            finished = getattr(self.sprite._clip, "finished", None)
+            if finished is not None:
+                slot = (self._on_one_shot_finished if one_shot
+                        else self._on_state_clip_finished)
+                if self.state != "idle" or one_shot:
+                    finished.connect(slot, Qt.UniqueConnection)
             return
         # Missing animation is non-fatal; the state machine keeps running.
         print(f"[pet-pure] animation not found: {name}", file=sys.stderr)
+
+    def _on_one_shot_finished(self) -> None:
+        self._one_shot = None
+        # 播完回落：语义状态回状态动画；idle 回行为链（tick 掷骰接管）
+        if self.state != "idle":
+            self.play(STATE_ANIMATION[self.state])
+
+    def _on_state_clip_finished(self) -> None:
+        if self._one_shot is None and self.state != "idle":
+            self.play(STATE_ANIMATION[self.state])
 
     def _on_state(self, state: str) -> None:
         finished_work = self.state == "working" and state == "idle"
@@ -393,24 +417,24 @@ class PetWindow(QWidget):
             self.behavior.tick([self.sprite], dt)
         self.physics.tick([self.sprite], dt)
         self.sprite.advance(dt)
-        if self._one_shot is not None:
-            clip = self.sprite._clip
-            if clip is None or not getattr(clip, "isRunning", lambda: False)():
-                self._one_shot = None
-                if self.state != "idle":
-                    self.play(STATE_ANIMATION[self.state])
-        elif error_active:
+        # one_shot 的完成检测走 finished 信号（_on_one_shot_finished）——
+        # 不在 tick 里轮询 isRunning（FrameSeqClip 无该方法，恒 False 会让
+        # one_shot 在 16ms 内被切走，点击反应/celebrate 全部只见一闪）
+        if self._one_shot is None and error_active:
             # Rebinding every tick would restart the clip from frame 0
             # (bind_clip stops the old clip unconditionally), freezing the
             # animation — only enter it when something else is playing.
             if self.sprite._clip_name != "被吓一跳":
                 self.play("被吓一跳")
         elif self.state != "idle":
-            # 状态动画循环持住：被意外打断（clip 停了/被换）就回位
+            # 状态动画持住：clip 名被别的路径换掉才回位。绝不能按
+            # "isRunning" 判断——FrameSeqClip 没有该方法（getattr 恒 False），
+            # 每 tick 重绑会把动画永远钉在第 0 帧（实机"定住"的根因）；
+            # 循环播放由 finished 信号驱动（_on_state_clip_finished）。
+            # one_shot 播放期间不持住——否则 one_shot 在 16ms 内被本分支
+            # 覆盖回状态动画（celebrate/点击反应"不会做"的根因）。
             want = STATE_ANIMATION[self.state]
-            clip = self.sprite._clip
-            running = clip is not None and bool(getattr(clip, "isRunning", lambda: False)())
-            if self.sprite._clip_name != want or not running:
+            if self._one_shot is None and self.sprite._clip_name != want:
                 self.play(want)
         # 窗随宠移只在**拖拽会话内**且 drag_moves_zone 开启时启用：行为链的
         # 移动目标是窗口局部坐标，自主漫游期间挪窗会形成正反馈棘轮（试验版
