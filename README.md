@@ -41,15 +41,18 @@ dsh 运行时 driver 插件 ──HTTP 六端点──▶ 本进程（Qt 壳 + �
 
 ```bash
 .venv/Scripts/python.exe -m pip install PySide6 "imageio-ffmpeg==0.6.0"
-.venv/Scripts/python.exe main.py [--port 0] [--state-file PATH]
+.venv/Scripts/python.exe main.py [--port 0] [--pet-id pure]
 ```
 
 - **素材**：默认借用旧仓库 `dsh-pet-indesktop/assets/characters`
   （也可设 `DSH_PET_ASSETS` 环境变量，或在项目下建 `assets` junction——
   已 gitignore）。
-- **发现**：端口与 pid 写入 `$DSH_HOME/pet-http.json`（默认
-  `~/.dsh/pet-http.json`），driver 据此找到宠物；`--port 0` = 随机端口。
-  注意该清单与 Electron 载体共用，双方只验 pid 存活、后写者赢。
+- **发现（多宠注册表）**：启动信息写入 `$DSH_HOME/pet-http.d/<pet-id>.json`
+  （默认 `~/.dsh/pet-http.d/pure.json`，`--pet-id` 可改），driver 读整张
+  注册表路由：会话绑定宠在线优先，否则默认宠（第一个启动的）；审批/提问
+  全员通知、先答者赢。每 3s 再主张自己的条目（被覆盖即写回），退出时
+  条目随之清除（驱动按 pid 存活+控制面应答判定在线，死条目自动出局）。
+  `--port 0` = 随机端口。多宠使用说明见 Obsidian《DSH-PET 多宠使用指南》。
 - **本地交互**：左键点触摸（头/身部位判定，即时反应动画 + 事件入队）、
   按住拖拽（越过阈值升级，松手按末段轨迹甩出，抛掷物理接管；拖到窗缘
   窗口跟着挪，`drag_moves_zone: false` 时锁死在活动区内）、待机时自主

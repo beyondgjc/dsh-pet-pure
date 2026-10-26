@@ -209,8 +209,7 @@ class PetWindow(QWidget):
     def __init__(self, *, zone_size: tuple[int, int] = (900, 560),
                  zone_pos: tuple[int, int] | None = None,
                  drag_moves_zone: bool = True,
-                 manifest_path: Path | None = None,
-                 manifest_pet: str = "python") -> None:
+                 manifest_path: Path | None = None) -> None:
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -263,7 +262,6 @@ class PetWindow(QWidget):
         self._drag_committed = False
         self._piercing = False
         self._manifest_path = manifest_path
-        self._manifest_pet = manifest_pet
         self._active_interaction: tuple[http_control._PendingInteraction, list[str]] | None = None
 
         self.operations = PetOperations(self)
@@ -505,7 +503,7 @@ class PetWindow(QWidget):
             self.close()
 
     def _reassert_manifest(self) -> None:
-        """清单被别人覆盖（pid 不是本进程）就写回自己的。"""
+        """注册表条目被覆盖（pid 不是本进程）就写回自己的。"""
         import time as _time
         try:
             doc = json.loads(self._manifest_path.read_text(encoding="utf-8"))
@@ -518,7 +516,6 @@ class PetWindow(QWidget):
                 "port": self._control_server.server_address[1],
                 "pid": os.getpid(),
                 "since": int(_time.time() * 1000),
-                "pet": self._manifest_pet,
             }) + "\n", encoding="utf-8")
         except OSError:
             pass
@@ -649,9 +646,10 @@ class PetWindow(QWidget):
         if self._manifest_path is not None:
             try:
                 # 退出留痕：监督父进程看到旗标即不重生（用户主动退出的判定
-                # 依据，退出路径上的原生崩溃会让退出码非 0）
-                self._manifest_path.with_name("pet-pure-exit.flag").write_text(
-                    "quit", encoding="utf-8")
+                # 依据，退出路径上的原生崩溃会让退出码非 0）。旗标放 home
+                # 根（注册表目录保持只有条目文件）。
+                self._manifest_path.parent.parent.joinpath(
+                    "pet-pure-exit.flag").write_text("quit", encoding="utf-8")
             except OSError:
                 pass
         self.library.shutdown()
@@ -725,12 +723,13 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=0, help="control interface port (0 = random)")
     parser.add_argument("--assets", type=str, default=None, help="assets root dir")
     parser.add_argument("--state-file", type=str, default=None,
-                        help="write the control manifest (port/pid) here; "
-                             "default: $DSH_HOME/pet-http.json")
-    parser.add_argument("--manifest-pet", type=str, default="python",
-                        help="identity field in the manifest; the swap test "
-                             "publishes 'electron' so the existing driver "
-                             "picks this pet up without driver changes")
+                        help="legacy single-file manifest anchor; its parent "
+                             "dir is the dsh home (default ~/.dsh). The pet "
+                             "publishes to pet-http.d/<pet-id>.json there")
+    parser.add_argument("--pet-id", type=str, default="pure",
+                        help="registry entry id = pet-http.d/<pet-id>.json; "
+                             "multi-pet routing, default宠 selection and the "
+                             "affection ledger all key on it")
     parser.add_argument("--supervised", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--no-supervise", action="store_true",
                         help="run once; do not auto-restart after a crash")
@@ -740,13 +739,36 @@ def main() -> int:
         os.environ["DSH_PET_ASSETS"] = args.assets
     print(f"[pet-pure] assets root: {resolve_assets_root()}")
 
-    state_file = Path(args.state_file or os.path.join(
+    # dsh home 锚点：--state-file 只用来定位 home（兼容旧调用习惯），
+    # 发布目标是注册表 pet-http.d/<pet-id>.json（多宠架构，per-pet 文件
+    # 从机制上消灭 last-writer-wins 竞态）。
+    anchor = Path(args.state_file or os.path.join(
         os.environ.get("DSH_HOME") or os.path.join(os.path.expanduser("~"), ".dsh"),
         "pet-http.json",
     ))
+    home = anchor.parent
+    registry_file = home / "pet-http.d" / f"{args.pet_id}.json"
+    # 单实例接管（同 id）：注册表文件天然只含本 id 的 pid——旧实例活着
+    # 就终止它（用户手动重启 = 换血，直觉正确）；别的 id 不动（多宠共存）。
+    try:
+        old = json.loads(registry_file.read_text(encoding="utf-8"))
+        old_pid = int(old.get("pid") or 0)
+        if (args.supervised and old_pid and old_pid != os.getpid()
+                and _pid_alive(old_pid)):
+            os.kill(old_pid, signal.SIGTERM)
+            print(f"[pet-pure] took over previous '{args.pet_id}' pid={old_pid}", file=sys.stderr)
+    except (OSError, ValueError):
+        pass  # 没有注册表条目/损坏/进程已死：当首例启动
+    # 旧单清单文件退役：本宠过去发布的 pet-http.json 若还在，删掉——
+    # 驱动 legacy 折叠会把死 pid 条目忽略，但留着是垃圾。
+    if args.state_file is None:
+        try:
+            anchor.unlink(missing_ok=True)
+        except OSError:
+            pass
     # pythonw 下 stdout/stderr 是 None——诊断与 faulthandler 全部落盘，
     # "启动没效果"从此打开 pet-pure.log 就能查（超 512KB 重开截断）。
-    log_path = state_file.with_name("pet-pure.log")
+    log_path = home / "pet-pure.log"
     try:
         size = log_path.stat().st_size if log_path.exists() else 0
         log_file = open(log_path, "w" if size > 512_000 else "a",
@@ -755,10 +777,10 @@ def main() -> int:
             sys.stdout = log_file
             sys.stderr = log_file
         faulthandler.enable(log_file)
-        print(f"[pet-pure] ---- launch pid={os.getpid()} manifest={state_file} ----", flush=True)
+        print(f"[pet-pure] ---- launch pid={os.getpid()} registry={registry_file} ----", flush=True)
     except OSError:
         pass
-    exit_flag_path = state_file.with_name("pet-pure-exit.flag")
+    exit_flag_path = home / "pet-pure-exit.flag"
     if not args.supervised and not args.no_supervise:
         # 监督模式（默认）：app.exec 里偶发原生崩溃（faulthandler 只留转储、
         # 无细节）自动重生——换宠连续性优先，尸检照常落盘。正常退出
@@ -781,22 +803,8 @@ def main() -> int:
                 return 0
             print("[pet-pure] respawning in 2s", flush=True)
             _time.sleep(2)
-    # 单实例接管：同一清单上已有一只活宠就终止它（"一端口一宠物"同源铁律）
-    # ——身份不限（python/electron 都算）：换宠场景下旧宠占着同一份清单，
-    # 不清掉就是双宠同驱打架。监督父进程与子进程同 pid 时跳过（子进程会
-    # 再走一遍这段，父进程自己不是宠物）。
-    try:
-        old = json.loads(state_file.read_text(encoding="utf-8"))
-        old_pid = int(old.get("pid") or 0)
-        if (args.supervised and old_pid and old_pid != os.getpid()
-                and _pid_alive(old_pid)):
-            os.kill(old_pid, signal.SIGTERM)
-            print(f"[pet-pure] took over from previous instance pid={old_pid}", file=sys.stderr)
-    except (OSError, ValueError):
-        pass  # 没有清单/清单损坏/进程已死：当首例启动
-
-    # 壳层配置（活动区/锚点/拖拽是否连带挪区）：与清单同目录的 pet-pure.json
-    config_path = state_file.with_name("pet-pure.json")
+    # 壳层配置（活动区/锚点/拖拽是否连带挪区）：dsh home 下的 pet-pure.json。
+    config_path = home / "pet-pure.json"
     shell_config = load_shell_config(config_path)
     save_default_shell_config(config_path, shell_config)
 
@@ -810,8 +818,7 @@ def main() -> int:
         zone_size=(shell_config["zone_width"], shell_config["zone_height"]),
         zone_pos=zone_pos,
         drag_moves_zone=shell_config["drag_moves_zone"],
-        manifest_path=state_file,
-        manifest_pet=args.manifest_pet)
+        manifest_path=registry_file)
 
     control_state = ControlState()
     window._control_state = control_state
@@ -821,16 +828,16 @@ def main() -> int:
     port = server.server_address[1]
 
     try:
-        state_file.parent.mkdir(parents=True, exist_ok=True)
-        state_file.write_text(json.dumps({
+        registry_file.parent.mkdir(parents=True, exist_ok=True)
+        registry_file.write_text(json.dumps({
             "port": port,
             "pid": os.getpid(),
             "since": int(__import__("time").time() * 1000),
-            "pet": args.manifest_pet,
         }) + "\n", encoding="utf-8")
-        print(f"[pet-pure] control interface on 127.0.0.1:{port} (manifest: {state_file})")
+        print(f"[pet-pure] control interface on 127.0.0.1:{port} "
+              f"(registry: {registry_file})")
     except OSError as error:
-        print(f"[pet-pure] could not write the manifest: {error}", file=sys.stderr)
+        print(f"[pet-pure] could not write the registry entry: {error}", file=sys.stderr)
 
     window.show()
     signal.signal(signal.SIGINT, lambda *_a: app.quit())
@@ -844,7 +851,7 @@ def main() -> int:
         return app.exec()
     finally:
         try:
-            state_file.unlink()
+            registry_file.unlink()
         except OSError:
             pass
 
