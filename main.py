@@ -142,12 +142,15 @@ class SpeechBubble(QWidget):
 class PetWindow(QWidget):
     """The transparent always-on-top shell hosting one sprite + bubbles."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, zone_size: tuple[int, int] = (900, 560),
+                 zone_pos: tuple[int, int] | None = None,
+                 drag_moves_zone: bool = True) -> None:
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        # sprite 帧 461x259（scale 0.72）之外还要留漫游余量：窗太小宠永远被裁
-        self.resize(900, 560)
+        # 活动区 = 窗口工作区（行为链/物理/拖拽钳制共用），尺寸可配置
+        self.resize(max(ZONE_MIN_W, zone_size[0]), max(ZONE_MIN_H, zone_size[1]))
+        self._drag_moves_zone = drag_moves_zone
 
         self.library = MovieLibrary(
             parent=self,
@@ -155,7 +158,11 @@ class PetWindow(QWidget):
             asset_dir=resolve_assets_root() / catalog.DEFAULT_CHARACTER / "videos",
             prewarm_enabled=True,
         )
-        self.sprite = PetSprite(self.library, pos=QPointF(220, 150), parent=self)
+        # sprite 初始位 = 活动区居中（默认帧 461x259 的估宽）
+        self.sprite = PetSprite(
+            self.library,
+            pos=QPointF((self.width() - 461) // 2, (self.height() - 259) // 2),
+            parent=self)
         # PetSprite 是纯 QObject 模型：像素要靠宿主的 paintEvent 画（旧
         # overlay_window 的分工）。挂脏回调——位移/帧到达直驱局部重绘，
         # 不经 tick（V-3/V-4 同款）。
@@ -194,7 +201,13 @@ class PetWindow(QWidget):
         self.play(STATE_ANIMATION[self.state])
 
         screen = QApplication.primaryScreen().availableGeometry()
-        self.move(screen.left() + 120, screen.top() + 120)
+        if zone_pos is not None:
+            # 配置锚点钳进屏内（窗口整体不出屏）
+            self.move(
+                max(screen.left(), min(int(zone_pos[0]), screen.right() - self.width() + 1)),
+                max(screen.top(), min(int(zone_pos[1]), screen.bottom() - self.height() + 1)))
+        else:
+            self.move(screen.left() + 120, screen.top() + 120)
 
         tick = QTimer(self)
         tick.setInterval(16)
@@ -321,10 +334,11 @@ class PetWindow(QWidget):
             running = clip is not None and bool(getattr(clip, "isRunning", lambda: False)())
             if self.sprite._clip_name != want or not running:
                 self.play(want)
-        # 窗随宠移只在**拖拽会话内**启用：行为链的移动目标是窗口局部坐标，
-        # 自主漫游期间挪窗会形成正反馈棘轮（试验版窗口被拖出屏幕）——拖拽的
-        # 位置由鼠标驱动，没有那个反馈源，挪窗是安全的。
-        if self._drag_committed:
+        # 窗随宠移只在**拖拽会话内**且 drag_moves_zone 开启时启用：行为链的
+        # 移动目标是窗口局部坐标，自主漫游期间挪窗会形成正反馈棘轮（试验版
+        # 窗口被拖出屏幕）——拖拽的位置由鼠标驱动，没有那个反馈源。关掉
+        # drag_moves_zone 即硬限制模式：宠被锁死在配置的活动区内。
+        if self._drag_committed and self._drag_moves_zone:
             self._follow_drag_window()
         self._publish_snapshot()
 
@@ -512,6 +526,58 @@ class PetWindow(QWidget):
         super().closeEvent(event)
 
 
+# 壳层配置（pet-pure.json，与清单同目录）。zone = 活动区（透明窗口工作区），
+# 行为链/抛掷物理/拖拽钳制共用；zone_x/y 缺省 = 屏幕左上 (120,120) 起步。
+# 硬下限：sprite 帧 461x259 + 余量——区比帧还小宠会被裁，不准配。
+ZONE_MIN_W, ZONE_MIN_H = 500, 330
+SHELL_CONFIG_DEFAULTS = {
+    "zone_width": 900,
+    "zone_height": 560,
+    "zone_x": None,
+    "zone_y": None,
+    "drag_moves_zone": True,
+}
+
+
+def load_shell_config(path: Path) -> dict:
+    """读壳层配置；文件缺失/损坏/键非法逐项回退默认（绝不因配置挂壳）。"""
+    config = dict(SHELL_CONFIG_DEFAULTS)
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return config
+    if not isinstance(raw, dict):
+        return config
+    for key in ("zone_width", "zone_height"):
+        try:
+            value = int(raw.get(key, config[key]))
+        except (TypeError, ValueError):
+            continue
+        if key == "zone_width":
+            config[key] = max(ZONE_MIN_W, value)
+        else:
+            config[key] = max(ZONE_MIN_H, value)
+    for key in ("zone_x", "zone_y"):
+        try:
+            config[key] = int(raw[key])
+        except (TypeError, ValueError, KeyError):
+            config[key] = None
+    config["drag_moves_zone"] = bool(raw.get("drag_moves_zone", True))
+    return config
+
+
+def save_default_shell_config(path: Path, config: dict) -> None:
+    """首次运行落一份默认配置（用户可编辑；之后绝不覆盖用户改动）。"""
+    try:
+        if path.exists():
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8")
+    except OSError:
+        pass  # 配置落盘失败不拦启动
+
+
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)  # CPython 在 Windows 上特判 0 号信号 = 存在性探测
@@ -535,18 +601,6 @@ def main() -> int:
         os.environ["DSH_PET_ASSETS"] = args.assets
     print(f"[pet-pure] assets root: {resolve_assets_root()}")
 
-    app = QApplication(sys.argv)
-    app.setApplicationName("dsh-pet-pure")
-
-    window = PetWindow()
-
-    control_state = ControlState()
-    window._control_state = control_state
-    control_state.operations = window.operations
-    server = http_control.serve(control_state, port=args.port)
-    window._control_server = server
-    port = server.server_address[1]
-
     state_file = Path(args.state_file or os.path.join(
         os.environ.get("DSH_HOME") or os.path.join(os.path.expanduser("~"), ".dsh"),
         "pet-http.json",
@@ -562,6 +616,30 @@ def main() -> int:
             print(f"[pet-pure] took over from previous instance pid={old_pid}", file=sys.stderr)
     except (OSError, ValueError):
         pass  # 没有清单/清单损坏/进程已死：当首例启动
+
+    # 壳层配置（活动区/锚点/拖拽是否连带挪区）：与清单同目录的 pet-pure.json
+    config_path = state_file.with_name("pet-pure.json")
+    shell_config = load_shell_config(config_path)
+    save_default_shell_config(config_path, shell_config)
+
+    app = QApplication(sys.argv)
+    app.setApplicationName("dsh-pet-pure")
+
+    zone_pos = None
+    if shell_config["zone_x"] is not None and shell_config["zone_y"] is not None:
+        zone_pos = (shell_config["zone_x"], shell_config["zone_y"])
+    window = PetWindow(
+        zone_size=(shell_config["zone_width"], shell_config["zone_height"]),
+        zone_pos=zone_pos,
+        drag_moves_zone=shell_config["drag_moves_zone"])
+
+    control_state = ControlState()
+    window._control_state = control_state
+    control_state.operations = window.operations
+    server = http_control.serve(control_state, port=args.port)
+    window._control_server = server
+    port = server.server_address[1]
+
     try:
         state_file.parent.mkdir(parents=True, exist_ok=True)
         state_file.write_text(json.dumps({
