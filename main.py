@@ -255,10 +255,16 @@ class PetWindow(QWidget):
         self._publish_snapshot()
 
     def _publish_snapshot(self) -> None:
-        clip_name = self.sprite._clip_name
+        geometry = self.geometry()
+        # window_facts 走 snapshot() 的合并通道；每 tick 直写（dict 换引用，
+        # HTTP 线程读到的是某一代完整值）。TS 载体的 /status 同样回报实况。
+        self._control_state.window_facts = {
+            "x": geometry.x(), "y": geometry.y(),
+            "width": geometry.width(), "height": geometry.height(),
+        }
         self._control_state.publish_snapshot({
             "state": self.state,
-            "animation": clip_name,
+            "animation": self.sprite._clip_name,
             "visible": self.isVisible(),
             "interaction": self._active_interaction is not None,
         })
