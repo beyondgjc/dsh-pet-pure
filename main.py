@@ -291,14 +291,6 @@ class PetWindow(QWidget):
         pierce.timeout.connect(self._update_pierce)
         pierce.start()
 
-        # 清单再主张（写者赢）：载体或其他宠覆盖了清单，3s 内写回——本宠
-        # 活着期间它才是被驱动的候选；退出即停止主张，位子自然让出
-        if self._manifest_path is not None:
-            reassert = QTimer(self)
-            reassert.setInterval(3000)
-            reassert.timeout.connect(self._reassert_manifest)
-            reassert.start()
-
     # -- operations wiring ------------------------------------------------
     def _wire_operations(self) -> None:
         ops = self.operations
@@ -501,24 +493,6 @@ class PetWindow(QWidget):
         chosen = menu.exec(event.globalPos())
         if chosen is act_quit:
             self.close()
-
-    def _reassert_manifest(self) -> None:
-        """注册表条目被覆盖（pid 不是本进程）就写回自己的。"""
-        import time as _time
-        try:
-            doc = json.loads(self._manifest_path.read_text(encoding="utf-8"))
-            if doc.get("pid") == os.getpid():
-                return
-        except (OSError, ValueError):
-            pass
-        try:
-            self._manifest_path.write_text(json.dumps({
-                "port": self._control_server.server_address[1],
-                "pid": os.getpid(),
-                "since": int(_time.time() * 1000),
-            }) + "\n", encoding="utf-8")
-        except OSError:
-            pass
 
     def _publish_snapshot(self) -> None:
         control_state = getattr(self, "_control_state", None)
