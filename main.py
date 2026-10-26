@@ -110,34 +110,64 @@ class PetOperations(QObject, Operations):
 
 
 class SpeechBubble(QWidget):
-    """A rounded self-dismissing speech bubble above the pet."""
+    """A rounded bubble above the pet: plain speech, or option buttons when
+    an interaction is active (buttons + number keys both answer)."""
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
         self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setObjectName("pet-speech-bubble")
-        from PySide6.QtWidgets import QLabel, QVBoxLayout
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
+        from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+        self._outer = QVBoxLayout(self)
+        self._outer.setContentsMargins(14, 10, 14, 10)
+        self._outer.setSpacing(6)
         self.label = QLabel(self)
         self.label.setWordWrap(True)
-        self.label.setMaximumWidth(360)
-        layout.addWidget(self.label)
+        self.label.setMaximumWidth(340)
+        self._outer.addWidget(self.label)
+        self._row = QHBoxLayout()
+        self._row.setSpacing(8)
+        self._outer.addLayout(self._row)
         self.setStyleSheet(
             "#pet-speech-bubble { background: rgba(252,253,255,244); border: 1px solid #c9d6e3;"
             " border-radius: 12px; }"
             "#pet-speech-bubble QLabel { color: #1c2733; font-size: 12px; }"
+            "#pet-speech-bubble QPushButton { background: #2f6fed; color: white; border: none;"
+            " border-radius: 8px; padding: 5px 14px; font-size: 12px; }"
+            "#pet-speech-bubble QPushButton:hover { background: #2258c4; }"
         )
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.hide)
+        self._on_option = None  # callable(str) set by the window
 
-    def say(self, text: str) -> None:
+    def say(self, text: str, *, options: list[str] | None = None) -> None:
         self.label.setText(text)
+        while self._row.count():
+            item = self._row.takeAt(0)
+            if widget := item.widget():
+                widget.deleteLater()
+        if options:
+            from PySide6.QtWidgets import QPushButton
+            for index, option in enumerate(options, start=1):
+                button = QPushButton(f"{index}. {option}", self)
+                button.setCursor(Qt.PointingHandCursor)
+                button.clicked.connect(lambda _=False, opt=option: self._pick(opt))
+                self._row.addWidget(button)
         self.adjustSize()
         self.show()
-        self._timer.start(4000 + min(len(text) * 60, 4000))
+        # 审批/提问不自动消失（用户在决策）；普通说话按长度定时
+        if options is None:
+            self._timer.start(4000 + min(len(text) * 60, 4000))
+        else:
+            self._timer.stop()
+
+    def _pick(self, option: str) -> None:
+        callback = self._on_option
+        self.hide()
+        if callback is not None:
+            callback(option)
 
 
 class PetWindow(QWidget):
@@ -271,9 +301,10 @@ class PetWindow(QWidget):
         if action == "celebrate":
             self.play(CELEBRATE_ANIMATION, one_shot=True)
 
-    def _on_say(self, text: str) -> None:
+    def _on_say(self, text: str, *, options: list[str] | None = None) -> None:
         geometry = self.geometry()
-        self.bubble.say(text)  # 先定尺寸再定位
+        self.bubble.say(text, options=options)  # 先定尺寸再定位
+        self.bubble._on_option = self._answer_interaction
         center = self.sprite.rect().center()
         bx = geometry.x() + center.x() - self.bubble.width() // 2
         by = geometry.y() + max(4, self.sprite.rect().top() - self.bubble.height() - 8)
@@ -293,10 +324,7 @@ class PetWindow(QWidget):
             options = ["允许", "拒绝"]
         self._active_interaction = (pending, options)
         lines = [str(text)]
-        if options:
-            lines.append("　".join(f"{i + 1}. {o}" for i, o in enumerate(options)))
-        lines.append("按数字键回答")
-        self._on_say("\n".join(lines))
+        self._on_say("\n".join(lines), options=options)
         pending.settled.clear()
 
     def _on_cancel(self, _interaction_id: str) -> None:
