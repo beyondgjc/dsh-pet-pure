@@ -111,7 +111,14 @@ class PetOperations(QObject, Operations):
 
 class SpeechBubble(QWidget):
     """A rounded bubble above the pet: plain speech, or option buttons when
-    an interaction is active (buttons + number keys both answer)."""
+    an interaction is active (buttons + number keys both answer).
+
+    投影阴影自绘（TS 气泡 box-shadow 的 Qt 等价）：窗口比内容大一圈留出
+    阴影扩散区，paintEvent 先画多层递减 alpha 的圆角矩形再画主体。
+    """
+
+    # 内容矩形相对窗口四边的留边（下边略大：阴影向下偏移，TS 的 0 6px 同款）
+    M_LEFT, M_TOP, M_RIGHT, M_BOTTOM = 18, 14, 18, 24
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
@@ -120,20 +127,22 @@ class SpeechBubble(QWidget):
         self.setObjectName("pet-speech-bubble")
         from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
         self._outer = QVBoxLayout(self)
-        self._outer.setContentsMargins(14, 10, 14, 10)
-        self._outer.setSpacing(6)
+        self._outer.setContentsMargins(self.M_LEFT, self.M_TOP, self.M_RIGHT, self.M_BOTTOM)
+        self._outer.setSpacing(8)
         self.label = QLabel(self)
         self.label.setWordWrap(True)
+        self.label.setTextFormat(Qt.RichText)
         self._outer.addWidget(self.label)
         self._row = QHBoxLayout()
         self._row.setSpacing(8)
         self._outer.addLayout(self._row)
         self.setStyleSheet(
-            "#pet-speech-bubble { background: rgba(252,253,255,244); border: 1px solid #c9d6e3;"
-            " border-radius: 12px; }"
-            "#pet-speech-bubble QLabel { color: #1c2733; font-size: 12px; }"
+            "#pet-speech-bubble { background: transparent; }"
+            "#pet-speech-bubble QLabel { color: #1c2733; font-size: 13px;"
+            " font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; }"
             "#pet-speech-bubble QPushButton { background: #2f6fed; color: white; border: none;"
-            " border-radius: 8px; padding: 5px 14px; font-size: 12px; }"
+            " border-radius: 8px; padding: 6px 16px; font-size: 12px;"
+            " font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; }"
             "#pet-speech-bubble QPushButton:hover { background: #2258c4; }"
         )
         self._timer = QTimer(self)
@@ -141,8 +150,28 @@ class SpeechBubble(QWidget):
         self._timer.timeout.connect(self.hide)
         self._on_option = None  # callable(str) set by the window
 
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        from PySide6.QtGui import QColor, QPainter, QPainterPath
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        body = self.rect().adjusted(self.M_LEFT, self.M_TOP,
+                                    -self.M_RIGHT, -self.M_BOTTOM)
+        # 多层扩张矩形近似高斯投影（TS: 0 6px 24px rgba(30,40,60,.18)）
+        for grow, alpha in ((1, 26), (3, 18), (6, 11), (10, 6), (14, 3)):
+            halo = body.adjusted(-grow, -grow // 2, grow, grow + 4)
+            path = QPainterPath()
+            path.addRoundedRect(halo, 12 + grow, 12 + grow)
+            painter.fillPath(path, QColor(30, 40, 60, alpha))
+        path = QPainterPath()
+        path.addRoundedRect(body, 12, 12)
+        painter.fillPath(path, QColor(255, 255, 255, 247))
+        painter.setPen(QColor(216, 224, 234))
+        painter.drawPath(path)
+
     def say(self, text: str, *, options: list[str] | None = None) -> None:
-        self.label.setText(text)
+        import html as _html
+        safe = _html.escape(text).replace("\n", "<br>")
+        self.label.setText(f"<p style='line-height:155%; margin:0;'>{safe}</p>")
         while self._row.count():
             item = self._row.takeAt(0)
             if widget := item.widget():
@@ -155,9 +184,9 @@ class SpeechBubble(QWidget):
                 button.clicked.connect(lambda _=False, opt=option: self._pick(opt))
                 self._row.addWidget(button)
         # QLabel 带 wordWrap 时 sizeHint 不可靠（长文本给"单行理想宽"塌成
-        # 竖排窄条）：先按 320 逻辑列宽算出换行后的真实高度，再定尺寸
-        self.label.setFixedWidth(320)
-        hint = self.label.heightForWidth(320)
+        # 竖排窄条）：先按 360 逻辑列宽算出换行后的真实高度，再定尺寸
+        self.label.setFixedWidth(360)
+        hint = self.label.heightForWidth(360)
         self.label.setFixedHeight(hint if hint and hint > 0 else self.label.sizeHint().height())
         self.adjustSize()
         self.show()
