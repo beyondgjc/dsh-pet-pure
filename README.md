@@ -92,3 +92,17 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest -q tests/
 .venv/Scripts/python.exe tests/smoke_shell.py
 # 想肉眼看一遍：QT_QPA_PLATFORM=windows .venv/Scripts/python.exe tests/smoke_shell.py
 ```
+
+## 发布（方案已定，实施暂缓）
+
+发布形态定为**便携目录包**（embeddable Python + 依赖 + 素材 + start.cmd，
+整目录拷贝即用）；PyInstaller 单 exe 仅在面向陌生用户分发时再考虑。
+实施要点：
+
+1. Python embeddable（3.14）解压到 `runtime\`，`python -m pip` 装
+   PySide6 + imageio-ffmpeg==0.6.0 到本地 site 包；
+2. 素材**真实拷贝** `assets/characters/shenshen/videos`（~50MB webm）——
+   帧缓存不用带，首次运行由 frameseq 供给后台自动生成（记得跑一轮
+   provision 或等它自己补完，期间部分动作走 WebM 路线）；
+3. `start-pet.cmd` 改为指 `runtime\pythonw.exe`；
+4. 验收 = 拷到无 Python 的机器跑通四件套（working/气泡/审批/触摸）。
