@@ -561,6 +561,14 @@ class PetWindow(QWidget):
 
     # -- lifecycle ---------------------------------------------------------
     def closeEvent(self, event) -> None:
+        if self._manifest_path is not None:
+            try:
+                # 退出留痕：监督父进程看到旗标即不重生（用户主动退出的判定
+                # 依据，退出路径上的原生崩溃会让退出码非 0）
+                self._manifest_path.with_name("pet-pure-exit.flag").write_text(
+                    "quit", encoding="utf-8")
+            except OSError:
+                pass
         self.library.shutdown()
         self._control_server.shutdown()
         super().closeEvent(event)
@@ -665,6 +673,7 @@ def main() -> int:
         print(f"[pet-pure] ---- launch pid={os.getpid()} manifest={state_file} ----", flush=True)
     except OSError:
         pass
+    exit_flag_path = state_file.with_name("pet-pure-exit.flag")
     if not args.supervised and not args.no_supervise:
         # 监督模式（默认）：app.exec 里偶发原生崩溃（faulthandler 只留转储、
         # 无细节）自动重生——换宠连续性优先，尸检照常落盘。正常退出
@@ -677,6 +686,12 @@ def main() -> int:
         while True:
             code = subprocess.call([sys.executable, *child_argv])
             print(f"[pet-pure] child exited code={code}", flush=True)
+            if exit_flag_path.exists():
+                # 子进程 closeEvent 留了痕 = 用户主动退出（退出路径上的原生
+                # 崩溃会让 code 非 0，不能据此重生违背用户意志）
+                exit_flag_path.unlink(missing_ok=True)
+                print("[pet-pure] graceful exit requested", flush=True)
+                return 0
             if code == 0:
                 return 0
             print("[pet-pure] respawning in 2s", flush=True)
