@@ -338,9 +338,9 @@ class PetWindow(QWidget):
         geometry = self.geometry()
         self.bubble.say(text, options=options)  # 先定尺寸再定位
         self.bubble._on_option = self._answer_interaction
-        center = self.sprite.rect().center()
-        bx = geometry.x() + center.x() - self.bubble.width() // 2
-        by = geometry.y() + max(4, self.sprite.rect().top() - self.bubble.height() - 8)
+        # TS 同款定位：水平窗口居中（不跟 sprite 乱跑），垂直贴 sprite 上缘
+        bx = geometry.x() + (geometry.width() - self.bubble.width()) // 2
+        by = geometry.y() + max(4, self.sprite.rect().top() - self.bubble.height() - 12)
         self.bubble.move(max(0, bx), max(0, by))
 
     def _on_interaction(self, interaction_id: str, kind: str, payload: object) -> None:
