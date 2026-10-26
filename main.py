@@ -595,6 +595,10 @@ def main() -> int:
     parser.add_argument("--state-file", type=str, default=None,
                         help="write the control manifest (port/pid) here; "
                              "default: $DSH_HOME/pet-http.json")
+    parser.add_argument("--manifest-pet", type=str, default="python",
+                        help="identity field in the manifest; the swap test "
+                             "publishes 'electron' so the existing driver "
+                             "picks this pet up without driver changes")
     args = parser.parse_args()
 
     if args.assets:
@@ -646,7 +650,7 @@ def main() -> int:
             "port": port,
             "pid": os.getpid(),
             "since": int(__import__("time").time() * 1000),
-            "pet": "python",
+            "pet": args.manifest_pet,
         }) + "\n", encoding="utf-8")
         print(f"[pet-pure] control interface on 127.0.0.1:{port} (manifest: {state_file})")
     except OSError as error:
