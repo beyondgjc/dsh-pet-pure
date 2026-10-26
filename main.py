@@ -724,12 +724,14 @@ def main() -> int:
                 return 0
             print("[pet-pure] respawning in 2s", flush=True)
             _time.sleep(2)
-    # 单实例接管：同一清单上已有一只活的 python 宠就终止它（"一端口一宠物"
-    # 同源铁律）——否则重启旧壳留双窗，冻结的那只抢走拖拽和视觉。
+    # 单实例接管：同一清单上已有一只活宠就终止它（"一端口一宠物"同源铁律）
+    # ——身份不限（python/electron 都算）：换宠场景下旧宠占着同一份清单，
+    # 不清掉就是双宠同驱打架。监督父进程与子进程同 pid 时跳过（子进程会
+    # 再走一遍这段，父进程自己不是宠物）。
     try:
         old = json.loads(state_file.read_text(encoding="utf-8"))
         old_pid = int(old.get("pid") or 0)
-        if (old.get("pet") == "python" and old_pid and old_pid != os.getpid()
+        if (args.supervised and old_pid and old_pid != os.getpid()
                 and _pid_alive(old_pid)):
             os.kill(old_pid, signal.SIGTERM)
             print(f"[pet-pure] took over from previous instance pid={old_pid}", file=sys.stderr)
