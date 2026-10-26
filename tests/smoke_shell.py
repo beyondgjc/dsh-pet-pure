@@ -92,6 +92,14 @@ def touch_pet() -> None:
 
 def finish() -> None:
     timer.stop()
+    # 像素级验收：grab 强制走一遍 paintEvent → sprite.paint → _rebuild_pixmap，
+    # 采样非透明像素——正是"协议全绿但窗口全透明"这类断链的唯一探测器。
+    image = window.grab().toImage()
+    opaque = sum(
+        1 for y in range(0, image.height(), 8) for x in range(0, image.width(), 8)
+        if image.pixelColor(x, y).alpha() > 0
+    )
+    results["opaque_samples"] = opaque
     server.shutdown()
     checks = {
         "caps.states": results.get("caps", {}).get("states") == ["idle", "thinking", "working", "error"],
@@ -105,6 +113,7 @@ def finish() -> None:
         "interaction.answer": results.get("interaction") == {"ok": True, "answer": "allowed-once"},
         "touch event": "touch" in results.get("events", []),
         "answered on GUI thread": phase["answered"],
+        "sprite pixels composited": opaque > 50,
         "no driver error": "error" not in results,
     }
     failed = [key for key, ok in checks.items() if not ok]

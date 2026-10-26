@@ -23,7 +23,7 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPointF, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QMouseEvent, QPainter, QRegion
 from PySide6.QtWidgets import QApplication, QWidget
 
 HERE = Path(__file__).resolve().parent
@@ -151,6 +151,15 @@ class PetWindow(QWidget):
             prewarm_enabled=True,
         )
         self.sprite = PetSprite(self.library, pos=QPointF(120, 40), parent=self)
+        # PetSprite 是纯 QObject 模型：像素要靠宿主的 paintEvent 画（旧
+        # overlay_window 的分工）。挂脏回调——位移/帧到达直驱局部重绘，
+        # 不经 tick（V-3/V-4 同款）。
+        def _on_sprite_dirty(old, new) -> None:
+            try:
+                self.update(QRegion(old) | QRegion(new))
+            except RuntimeError:
+                pass  # 窗口 C++ 侧已销毁（退出竞态）
+        self.sprite._dirty_cb = _on_sprite_dirty
         self.bubble = SpeechBubble(self)
 
         self.state = "idle"
@@ -234,6 +243,12 @@ class PetWindow(QWidget):
         self.bubble.hide()
 
     # -- frame loop -------------------------------------------------------
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        if getattr(self.sprite, "visible", True):
+            self.sprite.paint(painter)
+
     @staticmethod
     def _monotonic() -> float:
         import time
@@ -255,14 +270,17 @@ class PetWindow(QWidget):
         self._publish_snapshot()
 
     def _publish_snapshot(self) -> None:
+        control_state = getattr(self, "_control_state", None)
+        if control_state is None:  # main() 接线完成前 tick 先到：静默跳过
+            return
         geometry = self.geometry()
         # window_facts 走 snapshot() 的合并通道；每 tick 直写（dict 换引用，
         # HTTP 线程读到的是某一代完整值）。TS 载体的 /status 同样回报实况。
-        self._control_state.window_facts = {
+        control_state.window_facts = {
             "x": geometry.x(), "y": geometry.y(),
             "width": geometry.width(), "height": geometry.height(),
         }
-        self._control_state.publish_snapshot({
+        control_state.publish_snapshot({
             "state": self.state,
             "animation": self.sprite._clip_name,
             "visible": self.isVisible(),
