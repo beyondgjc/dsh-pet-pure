@@ -588,7 +588,6 @@ def _pid_alive(pid: int) -> bool:
 
 def main() -> int:
     import faulthandler
-    faulthandler.enable()
     parser = argparse.ArgumentParser(description="dsh-pet-pure: pure-UI desktop pet")
     parser.add_argument("--port", type=int, default=0, help="control interface port (0 = random)")
     parser.add_argument("--assets", type=str, default=None, help="assets root dir")
@@ -609,6 +608,20 @@ def main() -> int:
         os.environ.get("DSH_HOME") or os.path.join(os.path.expanduser("~"), ".dsh"),
         "pet-http.json",
     ))
+    # pythonw 下 stdout/stderr 是 None——诊断与 faulthandler 全部落盘，
+    # "启动没效果"从此打开 pet-pure.log 就能查（超 512KB 重开截断）。
+    log_path = state_file.with_name("pet-pure.log")
+    try:
+        size = log_path.stat().st_size if log_path.exists() else 0
+        log_file = open(log_path, "w" if size > 512_000 else "a",
+                        buffering=1, encoding="utf-8", errors="replace")
+        if sys.stdout is None or sys.stderr is None:
+            sys.stdout = log_file
+            sys.stderr = log_file
+        faulthandler.enable(log_file)
+        print(f"[pet-pure] ---- launch pid={os.getpid()} manifest={state_file} ----", flush=True)
+    except OSError:
+        pass
     # 单实例接管：同一清单上已有一只活的 python 宠就终止它（"一端口一宠物"
     # 同源铁律）——否则重启旧壳留双窗，冻结的那只抢走拖拽和视觉。
     try:
