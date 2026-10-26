@@ -144,7 +144,9 @@ class PetWindow(QWidget):
 
     def __init__(self, *, zone_size: tuple[int, int] = (900, 560),
                  zone_pos: tuple[int, int] | None = None,
-                 drag_moves_zone: bool = True) -> None:
+                 drag_moves_zone: bool = True,
+                 manifest_path: Path | None = None,
+                 manifest_pet: str = "python") -> None:
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -192,6 +194,8 @@ class PetWindow(QWidget):
         self._press_global: QPoint | None = None
         self._drag_committed = False
         self._piercing = False
+        self._manifest_path = manifest_path
+        self._manifest_pet = manifest_pet
         self._active_interaction: tuple[http_control._PendingInteraction, list[str]] | None = None
 
         self.operations = PetOperations(self)
@@ -220,6 +224,14 @@ class PetWindow(QWidget):
         pierce.setInterval(60)
         pierce.timeout.connect(self._update_pierce)
         pierce.start()
+
+        # 清单再主张（写者赢）：载体或其他宠覆盖了清单，3s 内写回——本宠
+        # 活着期间它才是被驱动的候选；退出即停止主张，位子自然让出
+        if self._manifest_path is not None:
+            reassert = QTimer(self)
+            reassert.setInterval(3000)
+            reassert.timeout.connect(self._reassert_manifest)
+            reassert.start()
 
     # -- operations wiring ------------------------------------------------
     def _wire_operations(self) -> None:
@@ -401,6 +413,25 @@ class PetWindow(QWidget):
         chosen = menu.exec(event.globalPos())
         if chosen is act_quit:
             self.close()
+
+    def _reassert_manifest(self) -> None:
+        """清单被别人覆盖（pid 不是本进程）就写回自己的。"""
+        import time as _time
+        try:
+            doc = json.loads(self._manifest_path.read_text(encoding="utf-8"))
+            if doc.get("pid") == os.getpid():
+                return
+        except (OSError, ValueError):
+            pass
+        try:
+            self._manifest_path.write_text(json.dumps({
+                "port": self._control_server.server_address[1],
+                "pid": os.getpid(),
+                "since": int(_time.time() * 1000),
+                "pet": self._manifest_pet,
+            }) + "\n", encoding="utf-8")
+        except OSError:
+            pass
 
     def _publish_snapshot(self) -> None:
         control_state = getattr(self, "_control_state", None)
@@ -648,7 +679,9 @@ def main() -> int:
     window = PetWindow(
         zone_size=(shell_config["zone_width"], shell_config["zone_height"]),
         zone_pos=zone_pos,
-        drag_moves_zone=shell_config["drag_moves_zone"])
+        drag_moves_zone=shell_config["drag_moves_zone"],
+        manifest_path=state_file,
+        manifest_pet=args.manifest_pet)
 
     control_state = ControlState()
     window._control_state = control_state
