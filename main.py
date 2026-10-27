@@ -203,7 +203,7 @@ class SpeechBubble(QWidget):
                 button.setProperty("role", "primary" if index == 1 else "secondary")
                 button.setCursor(Qt.PointingHandCursor)
                 button.clicked.connect(lambda _=False, opt=option: self._pick(opt))
-                self._row.addWidget(button)
+                self._row.addWidget(button, 0, Qt.AlignRight)
         # QLabel 带 wordWrap 的尺寸陷阱（DPR 1.5 实锤）：sizeHint 给"单行理想
         # 宽"、手动 heightForWidth+setFixedHeight 在非 1.0 DPR 下失准 → 正文
         # 高度塌 0。标准解 = 固定列宽 + sizePolicy 声明 heightForWidth，让
@@ -387,6 +387,24 @@ class PetWindow(QWidget):
         if action == "celebrate":
             self.play(CELEBRATE_ANIMATION, one_shot=True)
 
+    def _place_bubble(self) -> None:
+        """气泡跟随宠物：贴 sprite 上缘、水平对齐 sprite 中心，钳在屏内。
+
+        每 tick 调用——pet 会游走/被拖，say 时刻的定位立即过时（TS 宠的
+        气泡长在宠物窗口里天然跟随，pure 的活动窗大，必须显式跟）。
+        """
+        if not self.bubble.isVisible():
+            return
+        geometry = self.geometry()
+        center = self.sprite.rect().center()
+        bx = geometry.x() + center.x() - self.bubble.width() // 2
+        by = geometry.y() + self.sprite.rect().top() - self.bubble.height() - 12
+        screen = self.screen().availableGeometry() if self.screen() else None
+        if screen is not None:
+            bx = max(screen.left() + 4, min(bx, screen.right() - self.bubble.width() - 4))
+            by = max(screen.top() + 4, min(by, screen.bottom() - self.bubble.height() - 4))
+        self.bubble.move(bx, by)
+
     def _on_say(self, text: str, *, title: str | None = None,
                 options: list[str] | None = None) -> None:
         if options is None and self._active_interaction is not None:
@@ -396,13 +414,9 @@ class PetWindow(QWidget):
             # 是交互呈现本身，不拦。
             print("[pet-pure] /say ignored: interaction bubble is up", file=sys.stderr)
             return
-        geometry = self.geometry()
         self.bubble.say(text, title=title, options=options)  # 先定尺寸再定位
         self.bubble._on_option = self._answer_interaction
-        # TS 同款定位：水平窗口居中（不跟 sprite 乱跑），垂直贴 sprite 上缘
-        bx = geometry.x() + (geometry.width() - self.bubble.width()) // 2
-        by = geometry.y() + max(4, self.sprite.rect().top() - self.bubble.height() - 12)
-        self.bubble.move(max(0, bx), max(0, by))
+        self._place_bubble()
 
     def _on_interaction(self, interaction_id: str, kind: str, payload: object) -> None:
         pending, request = payload
@@ -485,6 +499,7 @@ class PetWindow(QWidget):
         # drag_moves_zone 即硬限制模式：宠被锁死在配置的活动区内。
         if self._drag_committed and self._drag_moves_zone:
             self._follow_drag_window()
+        self._place_bubble()
         self._publish_snapshot()
 
     # -- 窗随宠移（仅拖拽会话）与穿透 --------------------------------------
