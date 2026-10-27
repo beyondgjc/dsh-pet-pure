@@ -26,6 +26,7 @@ Design notes (WSGI-free on purpose):
 from __future__ import annotations
 
 import json
+import select
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -223,17 +224,24 @@ def make_handler(state: ControlState):
             # Streaming holder: the headers go out immediately so the driver's
             # fetch resolves; the body IS the user's answer, delimited by the
             # connection close (no content-length is legal together with
-            # Connection: close). The periodic space is body padding and the
-            # dead-peer probe in one: a vanished driver makes the write raise,
-            # which withdraws the bubble.
+            # Connection: close).
+            #
+            # Disconnect detection rides select() on the socket: the driver's
+            # abort closes the socket (FIN or RST), which turns it readable
+            # with EOF/an error — detected within the 50ms loop tick. The old
+            # write-probe (keepalive byte failing) only noticed on its 1s
+            # cadence, and that delay WAS the losing pet's bubble retraction
+            # lag in the multi-pet race (TS retracts instantly).
             self.send_response(200)
             self.send_header("content-type", "application/json")
             self.send_header("cache-control", "no-store")
             self.send_header("connection", "close")
             self.end_headers()
             try:
-                while not pending.settled.wait(1.0):
-                    self.wfile.write(b" ")  # keepalive; a dead peer raises here
+                while not pending.settled.wait(0.05):
+                    ready, _, _ = select.select([self.connection], [], [], 0)
+                    if ready and not self.rfile.read(1):
+                        raise ConnectionError("driver closed the long poll")
             except OSError:
                 self._ops().cancel_interaction(pending.id)
                 return
