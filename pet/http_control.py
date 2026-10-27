@@ -158,6 +158,9 @@ def make_handler(state: ControlState):
                     "actions": list(ACTION_VOCABULARY),
                     "interactions": list(INTERACTION_VOCABULARY),
                     "events": list(EVENT_VOCABULARY),
+                    # TS 载体同款：本宠暴露的路由声明（消费方据此探测能力）
+                    "endpoints": ["capabilities", "status", "state", "action",
+                                  "say", "interaction", "events"],
                 })
                 return
             if parsed.path == "/status":

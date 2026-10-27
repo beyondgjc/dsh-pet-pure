@@ -113,6 +113,8 @@ class TestCapabilities:
         assert doc["actions"] == ["celebrate"]
         assert doc["interactions"] == ["approval", "question"]
         assert doc["events"] == ["touch"]
+        assert doc["endpoints"] == ["capabilities", "status", "state", "action",
+                                    "say", "interaction", "events"]
 
     def test_unknown_get_is_404(self, conn):
         status, doc = _get_json(conn, "/nope")

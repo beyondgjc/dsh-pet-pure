@@ -20,6 +20,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, QPointF, QRect, Qt, QTimer, Signal
@@ -256,6 +257,11 @@ class PetWindow(QWidget):
         self.state = "idle"
         self._one_shot: str | None = None
         self._error_until = 0.0
+        # /action 的可观察见证（TS 载体同款字段，恒在场——条件缺席是
+        # JSON.stringify 的 undefined 陷阱）
+        self._last_action: str | None = None
+        self._last_action_at: int | None = None
+        self._last_action_done: dict | None = None
         # 鼠标会话（旧 overlay 的 grab 协议）：按下=点击候选，过阈值才升级
         self._mouse_grab = False
         self._press_global: QPoint | None = None
@@ -322,6 +328,9 @@ class PetWindow(QWidget):
         print(f"[pet-pure] animation not found: {name}", file=sys.stderr)
 
     def _on_one_shot_finished(self) -> None:
+        # 完成收据（TS 载体同款）：durationMs = 从推入到播完的实际墙钟
+        if self._last_action_done is not None and self._last_action_done["durationMs"] is None:
+            self._last_action_done["durationMs"] = int(time.time() * 1000) - self._last_action_done["at"]
         self._one_shot = None
         # 播完回落：语义状态回状态动画；idle 回行为链（tick 掷骰接管）
         if self.state != "idle":
@@ -345,6 +354,11 @@ class PetWindow(QWidget):
             self.play(STATE_ANIMATION[state])
 
     def _on_action(self, action: str) -> None:
+        # /action 的可观察见证（TS 载体同款契约）：override 在单 tick 内可能
+        # 设/清，不是可靠见证——消费方轮询 lastAction/lastActionAt。
+        self._last_action = action
+        self._last_action_at = int(time.time() * 1000)
+        self._last_action_done = {"action": action, "durationMs": None, "at": self._last_action_at}
         if action == "celebrate":
             self.play(CELEBRATE_ANIMATION, one_shot=True)
 
@@ -512,6 +526,10 @@ class PetWindow(QWidget):
             "state": self.state,
             "animation": f"{animation}.webm" if animation else animation,
             "override": f"{self._one_shot}.webm" if self._one_shot else None,
+            # TS 载体同款见证字段（恒在场）：/action 的可观察痕迹
+            "lastAction": self._last_action,
+            "lastActionAt": self._last_action_at,
+            "lastActionDone": self._last_action_done,
             "visible": self.isVisible(),
             "interaction": self._active_interaction is not None,
         })
