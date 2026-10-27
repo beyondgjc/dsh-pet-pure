@@ -124,9 +124,11 @@ def _shared_prefetch_thread() -> QThread:
         _shared_threads.append(thread)
         app = QCoreApplication.instance()
         if app is not None:
-            # 生产路径：exec() 退出时 aboutToQuit 收口
-            app.aboutToQuit.connect(
-                _shutdown_shared_prefetch, Qt.ConnectionType.UniqueConnection)
+            # 生产路径：exec() 退出时 aboutToQuit 收口。不加 UniqueConnection：
+            # 裸函数 + UniqueConnection 在 PySide6 每次连接必产一条
+            # "unique connections require a member function" 警告（每建一条
+            # 预取线程产一条）；本函数幂等，重复连接无害。
+            app.aboutToQuit.connect(_shutdown_shared_prefetch)
         # 兜底：无 exec() 的上下文（pytest/脚本——QApplication 析构不发
         # aboutToQuit），atexit 在模块拆除前收口（幂等，注册一次即安）
         atexit.register(_shutdown_shared_prefetch)

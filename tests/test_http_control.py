@@ -438,3 +438,33 @@ def test_random_interaction_ids_are_unique():
     ids = {random_interaction_id() for _ in range(100)}
     assert len(ids) == 100
     assert all(i.startswith("ip-") for i in ids)
+
+class TestInteractionHeartbeat:
+    def test_heartbeat_spaces_keep_the_body_alive(self, server, monkeypatch):
+        """长轮询期间响应体按周期收到的空格 = 心跳（防 undici 300s
+        bodyTimeout）。monkeypatch 间隔到 0.2s，2s 内应收到多个空格。"""
+        monkeypatch.setattr(http_control, "INTERACTION_HEARTBEAT_SECONDS", 0.2)
+        srv, state = server
+        ops: FakeOps = state.operations
+        port = srv.server_address[1]
+        sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+        try:
+            body = json.dumps({"kind": "approval", "reason": "heartbeat"}).encode()
+            sock.sendall(
+                b"POST /interaction HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\n"
+                + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+            assert _pump_until(lambda: len(ops.interactions) == 1)
+            sock.settimeout(2.5)
+            buf = b""
+            try:
+                while len(buf) < 3:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    buf += chunk
+            except socket.timeout:
+                pass
+            assert buf.count(b" ") >= 3, f"heartbeat spaces missing: {buf[:80]!r}"
+        finally:
+            sock.close()

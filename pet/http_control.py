@@ -39,6 +39,8 @@ EVENT_VOCABULARY = ("touch",)
 
 MAX_TEXT_CHARS = 200
 MAX_EVENTS = 200
+# 长轮询心跳间隔：防 Node undici 300s bodyTimeout（TS 载体 60s 同款）
+INTERACTION_HEARTBEAT_SECONDS = 60.0
 
 
 class ControlState:
@@ -238,10 +240,19 @@ def make_handler(state: ControlState):
             self.send_header("connection", "close")
             self.end_headers()
             try:
+                # 每 60s 往响应体写一个空格（TS 载体 main.ts:651 同款）：喂
+                # Node undici 的 300s bodyTimeout——提问挂 5 分钟以上（用户
+                # 走开很常见）没有它，driver 那条臂超时阵亡，用户回来再点，
+                # 答案写进死 socket 静默丢失。断连探测与此无关（下面的
+                # select 在 abort/FIN/RST 的 50ms 内触发）。
+                last_beat = time.monotonic()
                 while not pending.settled.wait(0.05):
                     ready, _, _ = select.select([self.connection], [], [], 0)
                     if ready and not self.rfile.read(1):
                         raise ConnectionError("driver closed the long poll")
+                    if time.monotonic() - last_beat >= INTERACTION_HEARTBEAT_SECONDS:
+                        self.wfile.write(b" ")
+                        last_beat = time.monotonic()
             except OSError:
                 self._ops().cancel_interaction(pending.id)
                 return
