@@ -388,17 +388,19 @@ class PetWindow(QWidget):
             self.play(CELEBRATE_ANIMATION, one_shot=True)
 
     def _place_bubble(self) -> None:
-        """气泡跟随宠物：贴 sprite 上缘、水平对齐 sprite 中心，钳在屏内。
+        """气泡跟随宠物：贴 sprite 头顶、水平对齐 sprite 中心，钳在屏内。
 
         每 tick 调用——pet 会游走/被拖，say 时刻的定位立即过时（TS 宠的
         气泡长在宠物窗口里天然跟随，pure 的活动窗大，必须显式跟）。
+        垂直锚点下移 30px：视频帧顶部是透明边距（头部约从帧高 1/6 处
+        开始），按矩形顶定位会在头顶留出一条可见空隙。
         """
         if not self.bubble.isVisible():
             return
         geometry = self.geometry()
         center = self.sprite.rect().center()
         bx = geometry.x() + center.x() - self.bubble.width() // 2
-        by = geometry.y() + self.sprite.rect().top() - self.bubble.height() - 12
+        by = geometry.y() + self.sprite.rect().top() + 30 - self.bubble.height()
         screen = self.screen().availableGeometry() if self.screen() else None
         if screen is not None:
             bx = max(screen.left() + 4, min(bx, screen.right() - self.bubble.width() - 4))
