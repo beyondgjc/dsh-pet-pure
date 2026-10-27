@@ -389,6 +389,13 @@ class PetWindow(QWidget):
 
     def _on_say(self, text: str, *, title: str | None = None,
                 options: list[str] | None = None) -> None:
+        if options is None and self._active_interaction is not None:
+            # 交互气泡决策中：普通 say 让位（TS 渲染层同款守卫，renderer:470）。
+            # 不让位的后果 = 按钮被清、自灭计时启动、pending 挂死到 driver
+            # abort——模型"边说话边请求工具"是常态路径。options 非空的调用
+            # 是交互呈现本身，不拦。
+            print("[pet-pure] /say ignored: interaction bubble is up", file=sys.stderr)
+            return
         geometry = self.geometry()
         self.bubble.say(text, title=title, options=options)  # 先定尺寸再定位
         self.bubble._on_option = self._answer_interaction
@@ -403,6 +410,9 @@ class PetWindow(QWidget):
         if kind == "question":
             questions = request.get("questions") or []
             first = questions[0] if questions else {}
+            # 平台问题的真实 id（应答回带它；写死 "q1" 会被丢弃）。
+            # MVP 差距：只支持 questions[0]，多问题全答是 TS 已有的能力。
+            self._active_question_id = str(first.get("id") or "q1")
             title = str(first.get("question") or "请选择")
             options = [str(o.get("label")) for o in first.get("options") or [] if o.get("label")]
             text = "请选择一个选项"
@@ -656,7 +666,8 @@ class PetWindow(QWidget):
         self._active_interaction = None
         self.bubble.hide()
         if pending.kind == "question":
-            pending.answer = {"answer": {"answers": [{"id": "q1", "selected": [answer]}]}}
+            qid = getattr(self, "_active_question_id", "q1")
+            pending.answer = {"answer": {"answers": [{"id": qid, "selected": [answer]}]}}
         else:
             payload = {"allowed-once": "allowed-once", "拒绝": "rejected", "允许": "allowed-once"}
             pending.answer = {"answer": payload.get(answer, answer)}
@@ -752,6 +763,7 @@ def main() -> int:
                              "multi-pet routing, default宠 selection and the "
                              "affection ledger all key on it")
     parser.add_argument("--supervised", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--supervisor-pid", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--no-supervise", action="store_true",
                         help="run once; do not auto-restart after a crash")
     args = parser.parse_args()
@@ -771,11 +783,16 @@ def main() -> int:
     registry_file = home / "pet-http.d" / f"{args.pet_id}.json"
     # 单实例接管（同 id）：注册表文件天然只含本 id 的 pid——旧实例活着
     # 就终止它（用户手动重启 = 换血，直觉正确）；别的 id 不动（多宠共存）。
+    # **先杀旧监督者再杀旧真身**：监督者若活着，2s 内会重生真身，与本实例
+    # 的接管互杀成战争（TerminateProcess 不留退出旗标，旧监督者分不清）。
     try:
         old = json.loads(registry_file.read_text(encoding="utf-8"))
         old_pid = int(old.get("pid") or 0)
-        if (args.supervised and old_pid and old_pid != os.getpid()
-                and _pid_alive(old_pid)):
+        old_sup = int(old.get("supervisor") or 0)
+        if old_pid and old_pid != os.getpid() and _pid_alive(old_pid):
+            if old_sup and old_sup != os.getpid() and _pid_alive(old_sup):
+                os.kill(old_sup, signal.SIGTERM)
+                print(f"[pet-pure] terminated previous supervisor pid={old_sup}", file=sys.stderr)
             os.kill(old_pid, signal.SIGTERM)
             print(f"[pet-pure] took over previous '{args.pet_id}' pid={old_pid}", file=sys.stderr)
     except (OSError, ValueError):
@@ -808,9 +825,10 @@ def main() -> int:
         # （右键退出/Esc → code 0）不重生。
         import subprocess
         import time as _time
+        supervisor_pid = os.getpid()
         child_argv = [os.path.abspath(__file__),
                       *(a for a in sys.argv[1:] if a != "--supervised"),
-                      "--supervised"]
+                      "--supervised", "--supervisor-pid", str(supervisor_pid)]
         while True:
             code = subprocess.call([sys.executable, *child_argv])
             print(f"[pet-pure] child exited code={code}", flush=True)
@@ -822,6 +840,16 @@ def main() -> int:
                 return 0
             if code == 0:
                 return 0
+            # 让位检查：注册表条目的 supervisor 已换成别的 pid = 新实例接管
+            # 了本宠的坑位——重生就是互杀战争的第一枪，让位退出。
+            try:
+                entry = json.loads(registry_file.read_text(encoding="utf-8"))
+                owner = int(entry.get("supervisor") or 0)
+                if owner and owner != supervisor_pid and _pid_alive(owner):
+                    print(f"[pet-pure] registry owned by supervisor {owner} — yielding", flush=True)
+                    return 0
+            except (OSError, ValueError):
+                pass
             print("[pet-pure] respawning in 2s", flush=True)
             _time.sleep(2)
     # 壳层配置（活动区/锚点/拖拽是否连带挪区）：dsh home 下的 pet-pure.json。
@@ -854,6 +882,9 @@ def main() -> int:
             "port": port,
             "pid": os.getpid(),
             "since": int(__import__("time").time() * 1000),
+            # 监督者 pid：接管者先杀它再杀真身（防重生互杀战争），重生循环
+            # 据此让位。driver 只读 port/pid/since，多出的字段被忽略。
+            "supervisor": args.supervisor_pid or None,
         }) + "\n", encoding="utf-8")
         print(f"[pet-pure] control interface on 127.0.0.1:{port} "
               f"(registry: {registry_file})")
