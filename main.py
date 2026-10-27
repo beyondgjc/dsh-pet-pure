@@ -204,13 +204,16 @@ class SpeechBubble(QWidget):
                 button.setCursor(Qt.PointingHandCursor)
                 button.clicked.connect(lambda _=False, opt=option: self._pick(opt))
                 self._row.addWidget(button)
-        # QLabel 带 wordWrap 时 sizeHint 不可靠（长文本给"单行理想宽"塌成
-        # 竖排窄条）：先按内容列宽算出换行后的真实高度，再定尺寸
-        content_width = 372  # TS #bubble 宽 400 - 左右 padding 14×2
+        # QLabel 带 wordWrap 的尺寸陷阱（DPR 1.5 实锤）：sizeHint 给"单行理想
+        # 宽"、手动 heightForWidth+setFixedHeight 在非 1.0 DPR 下失准 → 正文
+        # 高度塌 0。标准解 = 固定列宽 + sizePolicy 声明 heightForWidth，让
+        # 布局自己用换行高度（宽 372 = TS #bubble 400 - padding 14×2）。
+        content_width = 372
         for label in ((self.title,) if title else ()) + (self.label,):
+            policy = label.sizePolicy()
+            policy.setHeightForWidth(True)
+            label.setSizePolicy(policy)
             label.setFixedWidth(content_width)
-            hint = label.heightForWidth(content_width)
-            label.setFixedHeight(hint if hint and hint > 0 else label.sizeHint().height())
         self.adjustSize()
         self.show()
         # 审批/提问不自动消失（用户在决策）；普通说话按长度定时
