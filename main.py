@@ -129,22 +129,35 @@ class SpeechBubble(QWidget):
         from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(self.M_LEFT, self.M_TOP, self.M_RIGHT, self.M_BOTTOM)
-        self._outer.setSpacing(8)
+        self._outer.setSpacing(10)
+        self.title = QLabel(self)
+        self.title.setWordWrap(True)
+        self.title.setTextFormat(Qt.RichText)
+        self.title.setObjectName("bubble-title")
+        self.title.setVisible(False)
+        self._outer.addWidget(self.title)
         self.label = QLabel(self)
         self.label.setWordWrap(True)
         self.label.setTextFormat(Qt.RichText)
+        self.label.setObjectName("bubble-body")
         self._outer.addWidget(self.label)
         self._row = QHBoxLayout()
-        self._row.setSpacing(8)
+        self._row.setSpacing(10)
+        self._row.setAlignment(Qt.AlignRight)
         self._outer.addLayout(self._row)
         self.setStyleSheet(
             "#pet-speech-bubble { background: transparent; }"
             "#pet-speech-bubble QLabel { color: #1c2733; font-size: 13px;"
             " font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; }"
-            "#pet-speech-bubble QPushButton { background: #2f6fed; color: white; border: none;"
-            " border-radius: 8px; padding: 6px 16px; font-size: 12px;"
-            " font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; }"
-            "#pet-speech-bubble QPushButton:hover { background: #2258c4; }"
+            "#pet-speech-bubble QLabel#bubble-title { font-size: 14px; font-weight: 600; }"
+            "#pet-speech-bubble QPushButton { border-radius: 8px; padding: 7px 20px;"
+            " font-size: 13px; font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; }"
+            "#pet-speech-bubble QPushButton[role='primary'] { background: #4d6bfe;"
+            " color: white; border: none; }"
+            "#pet-speech-bubble QPushButton[role='primary']:hover { background: #3d5af0; }"
+            "#pet-speech-bubble QPushButton[role='secondary'] { background: #ffffff;"
+            " color: #1c2733; border: 1px solid #d8e0ea; }"
+            "#pet-speech-bubble QPushButton[role='secondary']:hover { background: #f2f5f9; }"
         )
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -169,8 +182,13 @@ class SpeechBubble(QWidget):
         painter.setPen(QColor(216, 224, 234))
         painter.drawPath(path)
 
-    def say(self, text: str, *, options: list[str] | None = None) -> None:
+    def say(self, text: str, *, title: str | None = None,
+            options: list[str] | None = None) -> None:
         import html as _html
+        # 标题（approval 的 toolName / question 的问题行）——有才显示
+        self.title.setText(f"<p style='margin:0;'>{_html.escape(title)}</p>"
+                           if title else "")
+        self.title.setVisible(bool(title))
         safe = _html.escape(text).replace("\n", "<br>")
         self.label.setText(f"<p style='line-height:155%; margin:0;'>{safe}</p>")
         while self._row.count():
@@ -180,15 +198,19 @@ class SpeechBubble(QWidget):
         if options:
             from PySide6.QtWidgets import QPushButton
             for index, option in enumerate(options, start=1):
-                button = QPushButton(f"{index}. {option}", self)
+                button = QPushButton(option, self)
+                # 第一个选项 = 主操作（TS 同款：允许主蓝、拒绝次白）
+                button.setProperty("role", "primary" if index == 1 else "secondary")
                 button.setCursor(Qt.PointingHandCursor)
                 button.clicked.connect(lambda _=False, opt=option: self._pick(opt))
                 self._row.addWidget(button)
         # QLabel 带 wordWrap 时 sizeHint 不可靠（长文本给"单行理想宽"塌成
-        # 竖排窄条）：先按 360 逻辑列宽算出换行后的真实高度，再定尺寸
-        self.label.setFixedWidth(360)
-        hint = self.label.heightForWidth(360)
-        self.label.setFixedHeight(hint if hint and hint > 0 else self.label.sizeHint().height())
+        # 竖排窄条）：先按内容列宽算出换行后的真实高度，再定尺寸
+        content_width = 372  # TS #bubble 宽 400 - 左右 padding 14×2
+        for label in ((self.title,) if title else ()) + (self.label,):
+            label.setFixedWidth(content_width)
+            hint = label.heightForWidth(content_width)
+            label.setFixedHeight(hint if hint and hint > 0 else label.sizeHint().height())
         self.adjustSize()
         self.show()
         # 审批/提问不自动消失（用户在决策）；普通说话按长度定时
@@ -362,9 +384,10 @@ class PetWindow(QWidget):
         if action == "celebrate":
             self.play(CELEBRATE_ANIMATION, one_shot=True)
 
-    def _on_say(self, text: str, *, options: list[str] | None = None) -> None:
+    def _on_say(self, text: str, *, title: str | None = None,
+                options: list[str] | None = None) -> None:
         geometry = self.geometry()
-        self.bubble.say(text, options=options)  # 先定尺寸再定位
+        self.bubble.say(text, title=title, options=options)  # 先定尺寸再定位
         self.bubble._on_option = self._answer_interaction
         # TS 同款定位：水平窗口居中（不跟 sprite 乱跑），垂直贴 sprite 上缘
         bx = geometry.x() + (geometry.width() - self.bubble.width()) // 2
@@ -373,19 +396,22 @@ class PetWindow(QWidget):
 
     def _on_interaction(self, interaction_id: str, kind: str, payload: object) -> None:
         pending, request = payload
+        title: str | None
         if kind == "question":
             questions = request.get("questions") or []
             first = questions[0] if questions else {}
-            text = first.get("question") or "请选择"
+            title = str(first.get("question") or "请选择")
             options = [str(o.get("label")) for o in first.get("options") or [] if o.get("label")]
+            text = "请选择一个选项"
         else:
+            tool_name = request.get("toolName")
+            title = f"请求执行：{tool_name}" if tool_name else None
             text = request.get("displayReason") or request.get("reason") or "请求执行"
             if isinstance(text, dict):
                 text = text.get("zh") or text.get("en") or "请求执行"
             options = ["允许", "拒绝"]
         self._active_interaction = (pending, options)
-        lines = [str(text)]
-        self._on_say("\n".join(lines), options=options)
+        self._on_say(str(text), title=title, options=options)
         pending.settled.clear()
 
     def _on_cancel(self, _interaction_id: str) -> None:
