@@ -127,19 +127,24 @@ class SpeechBubble(QWidget):
         self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setObjectName("pet-speech-bubble")
-        from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout, QWidget
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(self.M_LEFT, self.M_TOP, self.M_RIGHT, self.M_BOTTOM)
-        self._outer.setSpacing(10)
+        self._outer.setSpacing(12)
         self.title = QLabel(self)
         self.title.setWordWrap(True)
         self.title.setTextFormat(Qt.RichText)
         self.title.setObjectName("bubble-title")
         self.title.setVisible(False)
         self._outer.addWidget(self.title)
-        self.label = QLabel(self)
-        self.label.setWordWrap(True)
-        self.label.setTextFormat(Qt.RichText)
+        self.label = QTextBrowser(self)
+        self.label.setFrameShape(QFrame.Shape.NoFrame)
+        self.label.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.label.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.label.setOpenExternalLinks(False)
+        self.label.setReadOnly(True)
+        self.label.document().setDocumentMargin(0)
+        self.label.document().setDefaultStyleSheet("p { line-height: 150%; margin: 0; }")
         self.label.setObjectName("bubble-body")
         self._outer.addWidget(self.label)
         self._row_host = QWidget(self)
@@ -161,7 +166,7 @@ class SpeechBubble(QWidget):
             "#pet-speech-bubble { background: transparent; }"
             "#pet-speech-bubble QLabel { color: #1c2733; font-size: 13px;"
             " font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; }"
-            "#pet-speech-bubble QLabel#bubble-title { font-size: 15px; font-weight: 600; }"
+            "#pet-speech-bubble QLabel#bubble-title { font-size: 15px; }"
             "#pet-speech-bubble QPushButton { border-radius: 8px; padding: 7px 20px;"
             " font-size: 13px; font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; }"
             "#pet-speech-bubble QPushButton[role='primary'] { background: #4d6bfe;"
@@ -170,13 +175,14 @@ class SpeechBubble(QWidget):
             "#pet-speech-bubble QPushButton[role='secondary'] { background: #ffffff;"
             " color: #1c2733; border: 1px solid #d8e0ea; }"
             "#pet-speech-bubble QPushButton[role='secondary']:hover { background: #f2f5f9; }"
-            "#pet-speech-bubble QPushButton[role='option'] { background: #eef2f7;"
+            "#pet-speech-bubble QPushButton[role='option'] { background: #f1f5f9;"
             " color: #1c2733; border: none; text-align: center; }"
             "#pet-speech-bubble QPushButton[role='option']:hover { background: #e0e8f0; }"
         )
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.hide)
+        self._tray_toggle = None  # callable 由 _setup_tray/菜单填充后为 QAction
         self._on_option = None  # callable(str) set by the window
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
@@ -200,14 +206,14 @@ class SpeechBubble(QWidget):
     def say(self, text: str, *, title: str | None = None,
             options: list[str] | None = None, stacked: bool = False) -> None:
         import html as _html
-        # 标题（approval 的 toolName / question 的问题行）——有才显示
-        self.title.setText(f"<p style='margin:0;'>{_html.escape(title)}</p>"
-                           if title else "")
+        # 标题（approval 的 toolName / question 的问题行）——<b> 用 700 字重
+        # （微软雅黑只有 400/700 两档，QSS font-weight:600 会被映射回 Regular）
+        self.title.setText(f"<b>{_html.escape(title)}</b>" if title else "")
         self.title.setVisible(bool(title))
-        # 正文不含内联 line-height（富文本尺寸测量不含内联行高 → 卡片削顶，
-        # 实机截图实证）；行距观感由 QSS/默认度量承担
+        # 行距走 document defaultStyleSheet（测量与渲染同源，heightForWidth
+        # 自洽——内联 style 的行高 Qt 尺寸测量不含，曾致卡片削顶）
         safe = _html.escape(text).replace("\n", "<br>")
-        self.label.setText(f"<p style='margin:0;'>{safe}</p>" if text else "")
+        self.label.setHtml(f"<p>{safe}</p>" if text else "")
         self.label.setVisible(bool(text))
         for host in (self._row_host, self._stack_host):
             host.setVisible(False)
@@ -246,13 +252,19 @@ class SpeechBubble(QWidget):
         # 布局自己用换行高度（宽 372 = TS #bubble 400 - padding 14×2）。
         # **不要** setFixedHeight——高度交给布局（含堆叠按钮行时总量自适应）。
         content_width = 372
-        for label in (self.title, self.label):
-            policy = label.sizePolicy()
-            policy.setHeightForWidth(True)
-            label.setSizePolicy(policy)
-            label.setFixedWidth(content_width)
+        # 标题（QLabel）：HFW 策略 + 固定列宽，布局按换行高度给高
+        policy = self.title.sizePolicy()
+        policy.setHeightForWidth(True)
+        self.title.setSizePolicy(policy)
+        self.title.setFixedWidth(content_width)
+        # 正文（QTextBrowser）：高度 = document 实际排版高（含 150% 行距，
+        # 测量与渲染同源永不离谱）——不走 HFW（滚动区不参与）
+        self.label.setFixedWidth(content_width)
+        if text:
+            self.label.document().setTextWidth(content_width)
+            self.label.setFixedHeight(int(self.label.document().size().height()) + 2)
         self.adjustSize()
-        # adjustSize 的窗口高不含 HFW 子项的换行高度（标题/正文多行被削顶，
+        # adjustSize 的窗口高不含 HFW 子项的换行高度（标题多行被削顶，
         # 实机截图实证）——按当前宽度用布局的 heightForWidth 校正窗口高
         hint = self.heightForWidth(self.width())
         if hint and hint > self.height():
