@@ -2,5 +2,5 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-# 素材是 junction（指向 dsh-pet-indesktop/assets），不进 git
-/assets/
+# 素材（webm 源）随仓库分发；帧缓存由供给器生成，不进 git
+assets/characters/shenshen/frameseq/
