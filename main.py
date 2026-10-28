@@ -127,7 +127,7 @@ class SpeechBubble(QWidget):
         self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setObjectName("pet-speech-bubble")
-        from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+        from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(self.M_LEFT, self.M_TOP, self.M_RIGHT, self.M_BOTTOM)
         self._outer.setSpacing(10)
@@ -142,14 +142,14 @@ class SpeechBubble(QWidget):
         self.label.setTextFormat(Qt.RichText)
         self.label.setObjectName("bubble-body")
         self._outer.addWidget(self.label)
-        self._row_host = QLabel(self)
+        self._row_host = QWidget(self)
         self._row_host.setObjectName("bubble-row-host")
         self._row = QHBoxLayout(self._row_host)
         self._row.setContentsMargins(0, 0, 0, 0)
         self._row.setSpacing(10)
         self._row.setAlignment(Qt.AlignRight)
         self._outer.addWidget(self._row_host)
-        self._stack_host = QLabel(self)
+        self._stack_host = QWidget(self)
         self._stack_host.setObjectName("bubble-stack-host")
         self._stack = QVBoxLayout(self._stack_host)
         self._stack.setContentsMargins(0, 0, 0, 0)
@@ -455,7 +455,7 @@ class PetWindow(QWidget):
         self.bubble.move(bx, by)
 
     def _on_say(self, text: str, *, title: str | None = None,
-                options: list[str] | None = None) -> None:
+                options: list[str] | None = None, stacked: bool = False) -> None:
         if not self.isVisible():
             return  # 隐藏态不冒泡（driver 状态机照常推进，显示回来即是最新）
         if options is None and self._active_interaction is not None:
@@ -465,7 +465,7 @@ class PetWindow(QWidget):
             # 是交互呈现本身，不拦。
             print("[pet-pure] /say ignored: interaction bubble is up", file=sys.stderr)
             return
-        self.bubble.say(text, title=title, options=options)  # 先定尺寸再定位
+        self.bubble.say(text, title=title, options=options, stacked=stacked)  # 先定尺寸再定位
         self.bubble._on_option = self._answer_interaction
         self._place_bubble()
 
