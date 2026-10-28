@@ -593,13 +593,21 @@ class PetWindow(QWidget):
             os.startfile(str(self._manifest_path.parent.parent))
 
     def _tray_icon(self) -> QIcon:
-        """托盘图标 = 待机首帧（帧缓存直取）；无缓存回退纯色圆标。"""
+        """托盘图标 = 待机首帧裁出角色主体方块（视频帧带透明边距，整帧缩放
+        会小成一个点）；多尺寸预缩入 QIcon（托盘按 DPI 取最接近的）。
+        无缓存回退纯色圆标。"""
         import glob
+        icon = QIcon()
         frames = sorted(glob.glob(str(
             resolve_assets_root() / "shenshen" / "frameseq" / "idle" / "待机呼吸休闲.g*" / "f_0001.webp")))
         if frames:
-            icon = QIcon(frames[0])
-            if not icon.isNull():
+            source = QPixmap(frames[0])
+            if not source.isNull():
+                # 角色主体方块：视频帧内以 BODY_BOX 中心 (320,195) 取 270×270
+                body_square = source.copy(185, 60, 270, 270)
+                for size in (16, 24, 32, 48, 64, 128):
+                    icon.addPixmap(body_square.scaled(
+                        size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
                 return icon
         pixmap = QPixmap(64, 64)
         pixmap.fill(QColor("#4d6bfe"))
