@@ -417,6 +417,8 @@ class PetWindow(QWidget):
 
     def _on_say(self, text: str, *, title: str | None = None,
                 options: list[str] | None = None) -> None:
+        if not self.isVisible():
+            return  # 隐藏态不冒泡（driver 状态机照常推进，显示回来即是最新）
         if options is None and self._active_interaction is not None:
             # 交互气泡决策中：普通 say 让位（TS 渲染层同款守卫，renderer:470）。
             # 不让位的后果 = 按钮被清、自灭计时启动、pending 挂死到 driver
@@ -430,6 +432,10 @@ class PetWindow(QWidget):
 
     def _on_interaction(self, interaction_id: str, kind: str, payload: object) -> None:
         pending, request = payload
+        if not self.isVisible():
+            # 隐藏态不呈现气泡：长轮询静默持有，web 卡片照常弹出（先答者赢
+            # 的另一臂），宠物臂由 driver abort / 超时自然收口。
+            return
         title: str | None
         if kind == "question":
             questions = request.get("questions") or []
@@ -463,6 +469,13 @@ class PetWindow(QWidget):
         screen = self.screen()
         if screen is not None:
             self.sprite.set_dpr(float(screen.devicePixelRatio()))
+        if getattr(self, "_tray_toggle", None) is not None:
+            self._tray_toggle.setText("隐藏宠物")
+
+    def hideEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        if getattr(self, "_tray_toggle", None) is not None:
+            self._tray_toggle.setText("显示宠物")
+        super().hideEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         painter = QPainter(self)
@@ -567,6 +580,8 @@ class PetWindow(QWidget):
     # -- 右键菜单 ----------------------------------------------------------
     # -- 托盘与菜单（右键/托盘共用一份动作） --------------------------------
     def _fill_pet_menu(self, menu) -> None:
+        self._tray_toggle = menu.addAction("隐藏宠物" if self.isVisible() else "显示宠物")
+        self._tray_toggle.triggered.connect(self._toggle_visible)
         act_summon = menu.addAction("召唤到屏幕中央")
         act_log = menu.addAction("打开日志文件夹")
         act_restart = menu.addAction("重启宠物")
@@ -587,6 +602,13 @@ class PetWindow(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def _toggle_visible(self) -> None:
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
+            self.raise_()
 
     def _open_logs(self) -> None:
         if self._manifest_path is not None:
