@@ -142,4 +142,4 @@ MovieLibrary（素材库：manifest + 路线决策，启动时扫描）
 - **Windows 进程**：taskkill 强杀不留退出旗标（监督会复活——设计）；venv pythonw 桩+真身双层；接管/重启按注册表 pid 打真身。
 - **编码**：Git Bash curl 发中文 JSON 会损毁（宠物 json.loads 失败走回退）——测试用英文 body 或 Python 客户端；.cmd 文件注释用 ASCII（GBK 控制台 + UTF-8 中文注释错位成命令）。
 - **Edit 工具删行**：会吞相邻行换行（import 粘连）——删行后编译/收集验证。
-- **帧缓存**：变更后重启宠物（路线启动时固化）；junction 对 npm pack/拷贝不可靠——发布用 robocopy 真实拷贝。
+- **帧缓存**：变更后重启宠物（路线启动时固化）；junction 对 git/npm 均不可靠——素材已真实入库（webm 随仓库，帧缓存首启自生成）。

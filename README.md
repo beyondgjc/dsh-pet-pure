@@ -45,9 +45,9 @@ dsh 运行时 driver 插件 ──HTTP 六端点──▶ 本进程（Qt 壳 + �
 .venv/Scripts/python.exe main.py [--port 0] [--pet-id pure]
 ```
 
-- **素材**：默认借用旧仓库 `dsh-pet-indesktop/assets/characters`
-  （也可设 `DSH_PET_ASSETS` 环境变量，或在项目下建 `assets` junction——
-  已 gitignore）。
+- **素材**：随仓库分发（`assets/characters/shenshen/videos`，53MB webm，
+  克隆即用）；也可用 `DSH_PET_ASSETS_DIR` 指向其他副本。帧序列缓存不随
+  仓库——首次运行由供给器后台自动生成。
 - **发现（多宠注册表）**：启动信息写入 `$DSH_HOME/pet-http.d/<pet-id>.json`
   （默认 `~/.dsh/pet-http.d/pure.json`，`--pet-id` 可改），driver 读整张
   注册表路由：会话绑定宠在线优先，否则默认宠（第一个启动的）；审批/提问
