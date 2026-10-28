@@ -235,12 +235,18 @@ class PetWindow(QWidget):
     def __init__(self, *, zone_size: tuple[int, int] = (900, 560),
                  zone_pos: tuple[int, int] | None = None,
                  drag_moves_zone: bool = True,
-                 manifest_path: Path | None = None) -> None:
+                 manifest_path: Path | None = None,
+                 scale: float = catalog.DEFAULT_SCALE,
+                 animation_gap: float = 30.0,
+                 no_move: bool = False) -> None:
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        # 活动区 = 窗口工作区（行为链/物理/拖拽钳制共用），尺寸可配置
-        self.resize(max(ZONE_MIN_W, zone_size[0]), max(ZONE_MIN_H, zone_size[1]))
+        # 活动区 = 窗口工作区（行为链/物理/拖拽钳制共用），尺寸可配置；
+        # 缩放联动下限：帧 640×360×scale + 余量，区比帧小宠会被裁
+        frame_w, frame_h = int(640 * scale), int(360 * scale)
+        self.resize(max(ZONE_MIN_W, int(zone_size[0]), frame_w + 40),
+                    max(ZONE_MIN_H, int(zone_size[1]), frame_h + 40))
         self._drag_moves_zone = drag_moves_zone
 
         self.library = MovieLibrary(
@@ -249,10 +255,11 @@ class PetWindow(QWidget):
             asset_dir=resolve_assets_root() / catalog.DEFAULT_CHARACTER / "videos",
             prewarm_enabled=True,
         )
-        # sprite 初始位 = 活动区居中（默认帧 461x259 的估宽）
+        # sprite 初始位 = 活动区居中（帧 640×360×scale）
         self.sprite = PetSprite(
             self.library,
-            pos=QPointF((self.width() - 461) // 2, (self.height() - 259) // 2),
+            pos=QPointF((self.width() - frame_w) // 2, (self.height() - frame_h) // 2),
+            scale=scale,
             parent=self)
         # PetSprite 是纯 QObject 模型：像素要靠宿主的 paintEvent 画（旧
         # overlay_window 的分工）。挂脏回调——位移/帧到达直驱局部重绘，
@@ -269,9 +276,9 @@ class PetWindow(QWidget):
         # + 抛掷物理，域 = 窗口局部工作区（宠 confined 在窗内，见 _tick 注）。
         # 碰撞世界单宠无意义，不装。
         self.behavior = BehaviorController(QRect(0, 0, self.width(), self.height()))
-        # 旧机同款 30s 动作间隔（治随机动作池"不停做动作"观感；间隔不延迟
-        # 聊天动作，待播联动优先于 gap）
-        self.behavior.animation_gap_seconds = 30.0
+        # 动作间隔（config 可调；0 = 关闭间隔）与游走开关
+        self.behavior.animation_gap_seconds = animation_gap
+        self.behavior.no_move = no_move
         # 预测预热禁用：后台解码线程与主线程 bind 竞态（idle 时 one-shot
         # bind 间歇性原生崩，working/forget 后不崩的实测模式）。帧序列
         # 起播本就 ~2.5ms，预热收益远小于稳定性。
@@ -716,6 +723,9 @@ SHELL_CONFIG_DEFAULTS = {
     "zone_x": None,
     "zone_y": None,
     "drag_moves_zone": True,
+    "animation_gap_seconds": 30.0,
+    "scale": 0.72,
+    "no_move": False,
 }
 
 
@@ -743,6 +753,14 @@ def load_shell_config(path: Path) -> dict:
         except (TypeError, ValueError, KeyError):
             config[key] = None
     config["drag_moves_zone"] = bool(raw.get("drag_moves_zone", True))
+    # 行为参数：动作间隔（0 = 关闭间隔）、宠物缩放（钳在可读区间）、游走开关
+    for key, lo, hi in (("animation_gap_seconds", 0.0, 3600.0), ("scale", 0.4, 1.5)):
+        try:
+            value = float(raw.get(key, config[key]))
+        except (TypeError, ValueError):
+            continue
+        config[key] = max(lo, min(hi, value))
+    config["no_move"] = bool(raw.get("no_move", False))
     return config
 
 
@@ -884,7 +902,10 @@ def main() -> int:
         zone_size=(shell_config["zone_width"], shell_config["zone_height"]),
         zone_pos=zone_pos,
         drag_moves_zone=shell_config["drag_moves_zone"],
-        manifest_path=registry_file)
+        manifest_path=registry_file,
+        scale=shell_config["scale"],
+        animation_gap=shell_config["animation_gap_seconds"],
+        no_move=shell_config["no_move"])
 
     control_state = ControlState()
     window._control_state = control_state

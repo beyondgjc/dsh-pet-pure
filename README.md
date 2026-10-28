@@ -71,7 +71,10 @@ dsh 运行时 driver 插件 ──HTTP 六端点──▶ 本进程（Qt 壳 + �
   "zone_height": 560,
   "zone_x": null,
   "zone_y": null,
-  "drag_moves_zone": true
+  "drag_moves_zone": true,
+  "animation_gap_seconds": 30.0,
+  "scale": 0.72,
+  "no_move": false
 }
 ```
 
@@ -82,6 +85,9 @@ dsh 运行时 driver 插件 ──HTTP 六端点──▶ 本进程（Qt 壳 + �
   配了会钳进屏内）
 - `drag_moves_zone`：拖到边界时是否连带挪动活动区。`false` = 硬限制
   模式——宠被锁死在活动区里，拖到边缘就是拖不动
+- `animation_gap_seconds`：随机动作播完后的间隔秒数（0 = 不间隔）
+- `scale`：宠物缩放（0.72 默认；联动活动区下限，超限自动扩区）
+- `no_move`：true = 禁用游走（移动桶并入动作池，只原地做动作）
 
 ## 测试
 
