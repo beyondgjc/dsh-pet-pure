@@ -256,6 +256,9 @@ class PetWindow(QWidget):
             asset_dir=resolve_assets_root() / catalog.DEFAULT_CHARACTER / "videos",
             prewarm_enabled=True,
         )
+        # 首跑帧序列供给（旧壳同款接线）：延迟后台把 webm 转帧序列缓存。
+        # 不接线 = 所有动画永远走 WebM 实时解码路线（reader 泄漏 + 重）。
+        self.library.maybe_provision_frameseq()
         # sprite 初始位 = 活动区居中（帧 640×360×scale）
         self.sprite = PetSprite(
             self.library,
