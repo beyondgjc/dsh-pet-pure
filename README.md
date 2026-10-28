@@ -1,6 +1,7 @@
 # dsh-pet-pure
 
 纯 UI 桌面宠物——DSH 运行时 driver 的**可替换终端**。本体零 DSH 知识：
+> 技术实现详见 [ARCHITECTURE.md](ARCHITECTURE.md)（架构/协议/渲染管线/交互体系/踩坑全集）；多宠产品语义见 Obsidian《DSH-PET 多宠使用指南》。
 driver（运行时内的插件）通过本地 HTTP 控制接口下发语义操作，宠物只负责
 渲染与交互回报；触摸等宠物侧事件由 driver 轮询取走。
 
@@ -85,7 +86,7 @@ dsh 运行时 driver 插件 ──HTTP 六端点──▶ 本进程（Qt 壳 + �
 ## 测试
 
 ```bash
-# 契约单测（无 Qt 依赖，30 例）
+# 契约单测（无 Qt 依赖，37 例）
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest -q tests/
 
 # 全回路冒烟：真壳层 + 真信号接线 + 真解码（默认 offscreen）
