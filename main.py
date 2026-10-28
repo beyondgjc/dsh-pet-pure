@@ -24,7 +24,8 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, QPointF, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QCursor, QMouseEvent, QPainter, QRegion
+from PySide6.QtGui import (QColor, QCursor, QIcon, QMouseEvent, QPainter,
+                           QPixmap, QRegion)
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 HERE = Path(__file__).resolve().parent
@@ -564,11 +565,65 @@ class PetWindow(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents, pierce)
 
     # -- 右键菜单 ----------------------------------------------------------
+    # -- 托盘与菜单（右键/托盘共用一份动作） --------------------------------
+    def _fill_pet_menu(self, menu) -> None:
+        act_summon = menu.addAction("召唤到屏幕中央")
+        act_log = menu.addAction("打开日志文件夹")
+        act_restart = menu.addAction("重启宠物")
+        menu.addSeparator()
+        act_quit = menu.addAction("退出")
+        act_summon.triggered.connect(self._summon)
+        act_log.triggered.connect(self._open_logs)
+        act_restart.triggered.connect(lambda: os._exit(3))  # 无旗标硬退 → 监督 2s 重生
+        act_quit.triggered.connect(self.close)
+
+    def _summon(self) -> None:
+        """宠物游走/意外出屏时的找回：窗口回屏中央、sprite 回活动区中央。"""
+        screen = self.screen().availableGeometry() if self.screen() else None
+        if screen is not None:
+            self.move(screen.center().x() - self.width() // 2, screen.top() + 120)
+        self.sprite.set_pos(QPointF((self.width() - self.sprite.rect().width()) // 2,
+                                    (self.height() - self.sprite.rect().height()) // 2))
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _open_logs(self) -> None:
+        if self._manifest_path is not None:
+            os.startfile(str(self._manifest_path.parent.parent))
+
+    def _tray_icon(self) -> QIcon:
+        """托盘图标 = 待机首帧（帧缓存直取）；无缓存回退纯色圆标。"""
+        import glob
+        frames = sorted(glob.glob(str(
+            self.library.asset_dir.parent / "frameseq" / "idle" / "待机呼吸休闲.g*" / "f_0001.webp")))
+        if frames:
+            icon = QIcon(frames[0])
+            if not icon.isNull():
+                return icon
+        pixmap = QPixmap(64, 64)
+        pixmap.fill(QColor("#4d6bfe"))
+        return QIcon(pixmap)
+
+    def _setup_tray(self) -> None:
+        from PySide6.QtWidgets import QSystemTrayIcon
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return  # 无托盘环境（offscreen/裁剪）：静默跳过
+        self.tray = QSystemTrayIcon(self._tray_icon(), self)
+        tray_menu = QMenu()
+        self._tray_state = tray_menu.addAction("")
+        self._tray_state.setEnabled(False)
+        tray_menu.addSeparator()
+        self._fill_pet_menu(tray_menu)
+        self.tray.setContextMenu(tray_menu)
+        self.tray.setToolTip("dsh-pet-pure")
+        self.tray.show()
+
     def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         menu = QMenu(self)
-        act_quit = menu.addAction("退出")
+        self._fill_pet_menu(menu)
         chosen = menu.exec(event.globalPos())
-        if chosen is act_quit:
+        if chosen is not None and chosen.text() == "退出":
             self.close()
 
     def _publish_snapshot(self) -> None:
@@ -585,6 +640,9 @@ class PetWindow(QWidget):
         # 字段对齐 TS 载体的 /status（pet_state 工具原样透传给模型）：
         # animation 报文件名（.webm 后缀），override = 一次性动作覆盖
         animation = self.sprite._clip_name
+        if getattr(self, "tray", None) is not None:
+            self.tray.setToolTip(f"dsh-pet-pure: {self.state} / {animation}")
+            self._tray_state.setText(f"状态：{self.state}　动画：{animation or '无'}")
         control_state.publish_snapshot({
             "state": self.state,
             "animation": f"{animation}.webm" if animation else animation,
@@ -932,6 +990,7 @@ def main() -> int:
     window.show()
     signal.signal(signal.SIGINT, lambda *_a: app.quit())
     # A timer keeps the interpreter responsive to SIGINT under Qt.
+    window._setup_tray()
     keeper = QTimer()
     keeper.setInterval(200)
     keeper.timeout.connect(lambda: None)
