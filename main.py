@@ -142,10 +142,21 @@ class SpeechBubble(QWidget):
         self.label.setTextFormat(Qt.RichText)
         self.label.setObjectName("bubble-body")
         self._outer.addWidget(self.label)
-        self._row = QHBoxLayout()
+        self._row_host = QLabel(self)
+        self._row_host.setObjectName("bubble-row-host")
+        self._row = QHBoxLayout(self._row_host)
+        self._row.setContentsMargins(0, 0, 0, 0)
         self._row.setSpacing(10)
         self._row.setAlignment(Qt.AlignRight)
-        self._outer.addLayout(self._row)
+        self._outer.addWidget(self._row_host)
+        self._stack_host = QLabel(self)
+        self._stack_host.setObjectName("bubble-stack-host")
+        self._stack = QVBoxLayout(self._stack_host)
+        self._stack.setContentsMargins(0, 0, 0, 0)
+        self._stack.setSpacing(8)
+        self._outer.addWidget(self._stack_host)
+        self._row_host.setVisible(False)
+        self._stack_host.setVisible(False)
         self.setStyleSheet(
             "#pet-speech-bubble { background: transparent; }"
             "#pet-speech-bubble QLabel { color: #1c2733; font-size: 13px;"
@@ -159,6 +170,9 @@ class SpeechBubble(QWidget):
             "#pet-speech-bubble QPushButton[role='secondary'] { background: #ffffff;"
             " color: #1c2733; border: 1px solid #d8e0ea; }"
             "#pet-speech-bubble QPushButton[role='secondary']:hover { background: #f2f5f9; }"
+            "#pet-speech-bubble QPushButton[role='option'] { background: #eef2f7;"
+            " color: #1c2733; border: none; text-align: center; }"
+            "#pet-speech-bubble QPushButton[role='option']:hover { background: #e0e8f0; }"
         )
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -184,33 +198,55 @@ class SpeechBubble(QWidget):
         painter.drawPath(path)
 
     def say(self, text: str, *, title: str | None = None,
-            options: list[str] | None = None) -> None:
+            options: list[str] | None = None, stacked: bool = False) -> None:
         import html as _html
         # 标题（approval 的 toolName / question 的问题行）——有才显示
         self.title.setText(f"<p style='margin:0;'>{_html.escape(title)}</p>"
                            if title else "")
         self.title.setVisible(bool(title))
+        # 正文不含内联 line-height（富文本尺寸测量不含内联行高 → 卡片削顶，
+        # 实机截图实证）；行距观感由 QSS/默认度量承担
         safe = _html.escape(text).replace("\n", "<br>")
-        self.label.setText(f"<p style='line-height:155%; margin:0;'>{safe}</p>")
+        self.label.setText(f"<p style='margin:0;'>{safe}</p>" if text else "")
+        self.label.setVisible(bool(text))
+        for host in (self._row_host, self._stack_host):
+            host.setVisible(False)
         while self._row.count():
             item = self._row.takeAt(0)
             if widget := item.widget():
                 widget.deleteLater()
+        while self._stack.count():
+            item = self._stack.takeAt(0)
+            if widget := item.widget():
+                widget.deleteLater()
         if options:
             from PySide6.QtWidgets import QPushButton
-            for index, option in enumerate(options, start=1):
-                button = QPushButton(option, self)
-                # 第一个选项 = 主操作（TS 同款：允许主蓝、拒绝次白）
-                button.setProperty("role", "primary" if index == 1 else "secondary")
-                button.setCursor(Qt.PointingHandCursor)
-                button.clicked.connect(lambda _=False, opt=option: self._pick(opt))
-                self._row.addWidget(button, 0, Qt.AlignRight)
+            if stacked:
+                # 问题卡：全宽堆叠选项行（TS 同款，居中文字）
+                self._stack_host.setVisible(True)
+                for option in options:
+                    button = QPushButton(option, self)
+                    button.setProperty("role", "option")
+                    button.setFixedHeight(36)
+                    button.setCursor(Qt.PointingHandCursor)
+                    button.clicked.connect(lambda _=False, opt=option: self._pick(opt))
+                    self._stack.addWidget(button)
+            else:
+                # 审批卡：右对齐主/次按钮（第一个选项 = 主操作）
+                self._row_host.setVisible(True)
+                for index, option in enumerate(options, start=1):
+                    button = QPushButton(option, self)
+                    button.setProperty("role", "primary" if index == 1 else "secondary")
+                    button.setCursor(Qt.PointingHandCursor)
+                    button.clicked.connect(lambda _=False, opt=option: self._pick(opt))
+                    self._row.addWidget(button, 0, Qt.AlignRight)
         # QLabel 带 wordWrap 的尺寸陷阱（DPR 1.5 实锤）：sizeHint 给"单行理想
         # 宽"、手动 heightForWidth+setFixedHeight 在非 1.0 DPR 下失准 → 正文
         # 高度塌 0。标准解 = 固定列宽 + sizePolicy 声明 heightForWidth，让
         # 布局自己用换行高度（宽 372 = TS #bubble 400 - padding 14×2）。
+        # **不要** setFixedHeight——高度交给布局（含堆叠按钮行时总量自适应）。
         content_width = 372
-        for label in ((self.title,) if title else ()) + (self.label,):
+        for label in (self.title, self.label):
             policy = label.sizePolicy()
             policy.setHeightForWidth(True)
             label.setSizePolicy(policy)
@@ -448,7 +484,8 @@ class PetWindow(QWidget):
             self._active_question_id = str(first.get("id") or "q1")
             title = str(first.get("question") or "请选择")
             options = [str(o.get("label")) for o in first.get("options") or [] if o.get("label")]
-            text = "请选择一个选项"
+            text = ""
+            stacked = True
         else:
             tool_name = request.get("toolName")
             title = f"请求执行：{tool_name}" if tool_name else None
@@ -456,8 +493,9 @@ class PetWindow(QWidget):
             if isinstance(text, dict):
                 text = text.get("zh") or text.get("en") or "请求执行"
             options = ["允许", "拒绝"]
+            stacked = False
         self._active_interaction = (pending, options)
-        self._on_say(str(text), title=title, options=options)
+        self._on_say(str(text), title=title, options=options, stacked=stacked)
         pending.settled.clear()
 
     def _on_cancel(self, _interaction_id: str) -> None:

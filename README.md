@@ -113,3 +113,15 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest -q tests/
    provision 或等它自己补完，期间部分动作走 WebM 路线）；
 3. `start-pet.cmd` 改为指 `runtime\pythonw.exe`；
 4. 验收 = 拷到无 Python 的机器跑通四件套（working/气泡/审批/触摸）。
+
+## 许可与致谢
+
+代码按 **MIT** 分发（双上游版权与许可正文见 [LICENSE](LICENSE)）：
+
+- [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) —— 动画素材的最初来源仓库
+- [MerZlin/dsh-pet-indesktop](https://github.com/MerZlin/dsh-pet-indesktop) —— 渲染闭包（`pet/`）的剥离来源
+
+**素材授权（不适用 MIT）**：`assets/characters/shenshen/videos/**` 的角色
+动画（OC「溟月」）出自画师 **上善无形**，素材由社区成员整理制作，按
+**CC BY-NC-SA 类条款**发布——**仅限个人非商业使用**，须保留署名与来源，
+不得商用。第三方声明全文见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

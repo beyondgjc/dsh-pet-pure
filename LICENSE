@@ -1,0 +1,72 @@
+MIT License — dsh-pet-pure
+
+Copyright (c) 2026 beyondguo（dsh-pet-pure 壳层与适配代码）
+
+本仓库为衍生作品，其代码与素材来自以下 MIT 项目，按其许可要求保留
+原始版权与许可声明：
+
+------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2026 PC2005-cloud
+（dsh-pet —— 本项目动画素材的最初来源仓库）
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2026 Merzlin
+（dsh-pet-indesktop —— 本项目渲染闭包（pet/ 27 模块）的剥离来源仓库）
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------
+
+## 素材授权（重要——不适用 MIT）
+
+`assets/characters/shenshen/videos/**`（深深 / OC「溟月」的角色动画 webm，
+640×360 / 24fps / VP9-alpha 透明）：
+
+- **来源**：[PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)
+  （素材做法与来源），经
+  [MerZlin/dsh-pet-indesktop](https://github.com/MerZlin/dsh-pet-indesktop)
+  整理搬运，本仓库随源码继续分发。
+- **作者**：角色 OC「溟月」出自画师 **上善无形**，素材由社区成员整理制作。
+- **授权**：CC BY-NC-SA 类条款——**仅限个人非商业使用**；使用须保留署名
+  与来源；**不得用于任何商业 / 盈利场景**；派生物（如本仓库的代码与
+  打包产物）继续遵循同样约束。
