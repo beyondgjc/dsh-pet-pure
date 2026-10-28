@@ -596,7 +596,7 @@ class PetWindow(QWidget):
         """托盘图标 = 待机首帧（帧缓存直取）；无缓存回退纯色圆标。"""
         import glob
         frames = sorted(glob.glob(str(
-            self.library.asset_dir.parent / "frameseq" / "idle" / "待机呼吸休闲.g*" / "f_0001.webp")))
+            resolve_assets_root() / "shenshen" / "frameseq" / "idle" / "待机呼吸休闲.g*" / "f_0001.webp")))
         if frames:
             icon = QIcon(frames[0])
             if not icon.isNull():
