@@ -158,7 +158,7 @@ class SpeechBubble(QWidget):
         self._stack_host.setObjectName("bubble-stack-host")
         self._stack = QVBoxLayout(self._stack_host)
         self._stack.setContentsMargins(0, 0, 0, 0)
-        self._stack.setSpacing(8)
+        self._stack.setSpacing(6)
         self._outer.addWidget(self._stack_host)
         self._row_host.setVisible(False)
         self._stack_host.setVisible(False)
@@ -166,7 +166,8 @@ class SpeechBubble(QWidget):
             "#pet-speech-bubble { background: transparent; }"
             "#pet-speech-bubble QLabel { color: #1c2733; font-size: 13px;"
             " font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; }"
-            "#pet-speech-bubble QLabel#bubble-title { font-size: 15px; }"
+            "#pet-speech-bubble QLabel#bubble-title { font-weight: 600; }"
+            "#pet-speech-bubble QLabel#bubble-body { color: #5a6b7d; }"
             "#pet-speech-bubble QPushButton { border-radius: 8px; padding: 7px 20px;"
             " font-size: 13px; font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; }"
             "#pet-speech-bubble QPushButton[role='primary'] { background: #4d6bfe;"
@@ -175,9 +176,9 @@ class SpeechBubble(QWidget):
             "#pet-speech-bubble QPushButton[role='secondary'] { background: #ffffff;"
             " color: #1c2733; border: 1px solid #d8e0ea; }"
             "#pet-speech-bubble QPushButton[role='secondary']:hover { background: #f2f5f9; }"
-            "#pet-speech-bubble QPushButton[role='option'] { background: #f1f5f9;"
-            " color: #1c2733; border: none; text-align: center; }"
-            "#pet-speech-bubble QPushButton[role='option']:hover { background: #e0e8f0; }"
+            "#pet-speech-bubble QPushButton[role='option'] { background: #f4f7fa;"
+            " color: #1c2733; border: 1px solid #c9d4e0; text-align: center; }"
+            "#pet-speech-bubble QPushButton[role='option']:hover { background: #e8eff6; }"
         )
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -233,7 +234,7 @@ class SpeechBubble(QWidget):
                 for option in options:
                     button = QPushButton(option, self)
                     button.setProperty("role", "option")
-                    button.setFixedHeight(36)
+                    button.setFixedHeight(32)
                     button.setCursor(Qt.PointingHandCursor)
                     button.clicked.connect(lambda _=False, opt=option: self._pick(opt))
                     self._stack.addWidget(button)
