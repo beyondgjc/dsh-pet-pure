@@ -161,7 +161,7 @@ class SpeechBubble(QWidget):
             "#pet-speech-bubble { background: transparent; }"
             "#pet-speech-bubble QLabel { color: #1c2733; font-size: 13px;"
             " font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; }"
-            "#pet-speech-bubble QLabel#bubble-title { font-size: 14px; font-weight: 600; }"
+            "#pet-speech-bubble QLabel#bubble-title { font-size: 15px; font-weight: 600; }"
             "#pet-speech-bubble QPushButton { border-radius: 8px; padding: 7px 20px;"
             " font-size: 13px; font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; }"
             "#pet-speech-bubble QPushButton[role='primary'] { background: #4d6bfe;"
@@ -252,6 +252,11 @@ class SpeechBubble(QWidget):
             label.setSizePolicy(policy)
             label.setFixedWidth(content_width)
         self.adjustSize()
+        # adjustSize 的窗口高不含 HFW 子项的换行高度（标题/正文多行被削顶，
+        # 实机截图实证）——按当前宽度用布局的 heightForWidth 校正窗口高
+        hint = self.heightForWidth(self.width())
+        if hint and hint > self.height():
+            self.resize(self.width(), hint)
         self.show()
         # 审批/提问不自动消失（用户在决策）；普通说话按长度定时
         if options is None:
