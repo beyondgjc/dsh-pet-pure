@@ -49,8 +49,9 @@ class FakeOps(Operations):
 
     def __init__(self) -> None:
         self.states: list[str] = []
-        self.actions: list[str] = []
+        self.actions: list[tuple[str, str]] = []
         self.said: list[str] = []
+        self.worlds: list[dict | None] = []
         self.interactions: list[tuple[str, str, dict]] = []
         self.cancelled: list[str] = []
         self.pending: dict[str, http_control._PendingInteraction] = {}
@@ -58,11 +59,17 @@ class FakeOps(Operations):
     def set_state(self, state: str) -> None:
         self.states.append(state)
 
-    def perform(self, action: str) -> None:
-        self.actions.append(action)
+    def perform(self, action: str, request_id: str) -> None:
+        self.actions.append((action, request_id))
 
     def say(self, text: str) -> None:
         self.said.append(text)
+
+    def set_world(self, rect, done, applied) -> None:
+        # 同步款：屏幕交集判定恒通过，应用即 moved（无真实窗口几何）。
+        self.worlds.append(rect)
+        applied["moved"] = True
+        done.set()
 
     def start_interaction(self, kind, request):
         pending = http_control._PendingInteraction(random_interaction_id(), kind)
@@ -106,15 +113,16 @@ def _pump_until(condition, timeout=15.0):
 
 
 class TestCapabilities:
-    def test_declares_the_four_vocabularies(self, conn):
+    def test_declares_the_v4_contract(self, conn):
         status, doc = _get_json(conn, "/capabilities")
         assert status == 200
+        assert doc["contractVersion"] == 4
         assert doc["states"] == ["idle", "thinking", "working", "error"]
         assert doc["actions"] == ["celebrate"]
         assert doc["interactions"] == ["approval", "question"]
-        assert doc["events"] == ["touch"]
-        assert doc["endpoints"] == ["capabilities", "status", "state", "action",
-                                    "say", "interaction", "events"]
+        # v4：endpoints/events 词表退役（消费方按未知字段忽略）
+        assert "endpoints" not in doc
+        assert "events" not in doc
 
     def test_unknown_get_is_404(self, conn):
         status, doc = _get_json(conn, "/nope")
@@ -123,17 +131,31 @@ class TestCapabilities:
 
 
 class TestStatus:
-    def test_status_shape(self, conn, server):
+    def test_status_shape_v2(self, conn, server):
         _srv, state = server
         state.publish_snapshot({"state": "working", "animation": "写代码",
-                                "visible": True, "interaction": False})
-        state.window_facts = {"x": 11, "y": 22, "width": 460, "height": 400}
+                                "visible": True, "interaction": False,
+                                "location": {"x": 15, "y": 25, "width": 340, "height": 200}})
+        state.world_facts = {"x": 11, "y": 22, "width": 460, "height": 400}
         status, doc = _get_json(conn, "/status")
         assert status == 200
         assert doc["state"] == "working"
         assert doc["animation"] == "写代码"
-        assert doc["window"] == {"x": 11, "y": 22, "width": 460, "height": 400}
+        # v2：location=宠身包围盒（shell 合成），world=活动区（窗=区）
+        assert doc["location"] == {"x": 15, "y": 25, "width": 340, "height": 200}
+        assert doc["world"] == {"x": 11, "y": 22, "width": 460, "height": 400}
+        assert "window" not in doc
+        # v3 见证恒定输出：无记录 = null（不是缺席）
+        assert doc["lastAction"] is None
         assert doc["pid"] > 0
+
+    def test_location_falls_back_to_world_rect(self, conn, server):
+        """合成链路异常（shell 未合成 location）时退回窗矩形近似，不炸。"""
+        _srv, state = server
+        state.world_facts = {"x": 1, "y": 2, "width": 3, "height": 4}
+        status, doc = _get_json(conn, "/status")
+        assert status == 200
+        assert doc["location"] == {"x": 1, "y": 2, "width": 3, "height": 4}
 
     def test_default_snapshot_is_idle(self, conn):
         status, doc = _get_json(conn, "/status")
@@ -176,8 +198,11 @@ class TestOperations:
         _srv, state = server
         ops: FakeOps = state.operations
         status, doc = _post_json(conn, "/action", {"action": "celebrate"})
-        assert (status, doc) == (200, {"ok": True})
-        assert ops.actions == ["celebrate"]
+        assert status == 200
+        assert doc["ok"] is True and doc["action"] == "celebrate"
+        # v3 wait 关联键：响应 requestId 与传给 ops 的同值
+        assert isinstance(doc["requestId"], str) and doc["requestId"] != ""
+        assert ops.actions == [("celebrate", doc["requestId"])]
 
     def test_action_rejects_unknown(self, conn, server):
         _srv, state = server
@@ -289,6 +314,111 @@ class TestEventsEndpoint:
             assert status == 200 and len(doc["events"]) == 1
         finally:
             connection.close()
+
+    def test_hold_parks_until_an_event_lands(self, server):
+        """v4 长轮询：空队列挂住，新事件到即答（不到 hold 到点）。"""
+        srv, state = server
+        port = srv.server_address[1]
+        result: dict = {}
+
+        def call():
+            connection = HTTPConnection("127.0.0.1", port, timeout=15)
+            try:
+                started = time.monotonic()
+                result["response"] = _get_json(connection, "/events?since=0&hold=8")
+                result["elapsed"] = time.monotonic() - started
+            finally:
+                connection.close()
+
+        thread = threading.Thread(target=call, daemon=True)
+        thread.start()
+        time.sleep(0.5)  # 让挂起先发生
+        state.emit("touch", part="head")
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+        status, doc = result["response"]
+        assert status == 200
+        assert [e["type"] for e in doc["events"]] == ["touch"]
+        assert result["elapsed"] < 5  # 被事件唤醒，不是挂满 8s
+
+    def test_hold_to_the_dot_answers_an_empty_batch(self, server):
+        srv, state = server
+        connection = HTTPConnection("127.0.0.1", srv.server_address[1], timeout=15)
+        try:
+            started = time.monotonic()
+            status, doc = _get_json(connection, "/events?since=0&hold=1")
+            elapsed = time.monotonic() - started
+            assert status == 200
+            assert doc == {"events": [], "latest": 0}
+            assert 0.8 <= elapsed < 6
+        finally:
+            connection.close()
+
+    def test_backlog_and_rewind_answer_immediately_despite_hold(self, server):
+        srv, state = server
+        state.emit("touch", part="head")
+        connection = HTTPConnection("127.0.0.1", srv.server_address[1], timeout=15)
+        try:
+            started = time.monotonic()
+            status, doc = _get_json(connection, "/events?since=0&hold=8")
+            assert status == 200 and len(doc["events"]) == 1
+            assert time.monotonic() - started < 2  # 有积压恒立即
+            # 回卷（latest < since）恒立即返回不挂
+            status, doc = _get_json(connection, "/events?since=99&hold=8")
+            assert status == 200 and doc["events"] == [] and doc["latest"] < 99
+        finally:
+            connection.close()
+
+
+class TestChatUpstream:
+    def test_chat_event_shape_and_modal_gate(self, server):
+        """chat 上行（§6 2026-10-31）：type=text 事件、每宠至多一条在途。"""
+        _srv, state = server
+        accepted, seq = state.emit_chat("你好呀")
+        assert accepted is True and seq == 1
+        accepted2, pending_seq = state.emit_chat("第二条")
+        assert accepted2 is False and pending_seq == seq  # 在途模态：拒绝
+        events, latest = state.drain_since(0)
+        assert [e["type"] for e in events] == ["chat"]
+        assert events[0]["text"] == "你好呀" and events[0]["seq"] == seq
+        # 携出即发送成功：模态释放
+        accepted3, _ = state.emit_chat("第二条")
+        assert accepted3 is True
+
+    def test_chat_text_clamps_to_contract(self, server):
+        _srv, state = server
+        state.emit_chat("啊" * (http_control.MAX_CHAT_CHARS + 100))
+        events, _latest = state.drain_since(0)
+        assert len(events[0]["text"]) == http_control.MAX_CHAT_CHARS
+
+
+class TestWorld:
+    def test_valid_world_applies_and_answers_effective_rect(self, conn, server):
+        _srv, state = server
+        status, doc = _post_json(conn, "/world", {"x": 10, "y": 20, "width": 800, "height": 500})
+        assert status == 200
+        assert doc["ok"] is True
+        # 200 返回生效值（FakeOps 同步应用）——非请求回声由 /status.world 承接
+        assert doc["world"] is not None
+        assert doc["location"] is not None
+        assert doc["moved"] is True
+
+    def test_mistyped_rect_is_422(self, conn, server):
+        _srv, state = server
+        status, doc = _post_json(conn, "/world", {"x": "a", "y": 1, "width": 3, "height": 4})
+        assert status == 422 and doc["ok"] is False
+        status, _doc = _post_json(conn, "/world", {"x": 1, "y": 1})
+        assert status == 422
+
+    def test_reset_returns_default_zone(self, conn, server):
+        """pure 的窗=区恒有矩形：reset 回默认活动区（900x560），不是 null——
+        契约的「回落默认：workArea 钳制或默认区」在 pure 落在默认区。"""
+        _srv, state = server
+        status, doc = _post_json(conn, "/world", {"reset": True})
+        assert status == 200
+        assert doc["ok"] is True
+        world = doc["world"]
+        assert isinstance(world, dict) and all(k in world for k in ("x", "y", "width", "height"))
 
 
 class TestInteractionLongPoll:

@@ -32,11 +32,11 @@ start-pet.cmd / restart-pet.cmd
 
 | 端点 | 方法 | 语义 |
 |---|---|---|
-| /capabilities | GET | 四词表 + `endpoints` 路由声明（TS 载体同形） |
-| /status | GET | 镜像：state/animation(.webm)/override/lastAction 三件套/window/visible/pid |
-| /events?since=N | GET | 触摸等事件队列（seq 单调、有界 200 条） |
+| /capabilities | GET | 四词表 + contractVersion（`endpoints`/`events` 字段已退役 2026-10-31，过渡期仍发；TS 载体同形） |
+| /status | GET | 镜像：state/animation(.webm)/override/lastAction 见证对象/window/visible/pid/interaction |
+| /events?since=N | GET | 触摸等事件队列（seq 单调、有界 200 条）。**v4 长轮询（定稿待实施，现立即返回）**：`hold` 参数缺省 0=立即；>0 挂住钳 ≤30s——到点空批量必答、有积压一次 drain、`latest<since` 重启回卷恒立即返回。**chat 事件类型（10-31 定稿待实施）**：事件体加 `type`（touch|chat，缺省=touch，未知忽略）——chat = 宠物旁对话输入上行（每宠至多一条在途、响应携出即发送成功、text ≤2000 字）；本侧触发 = 输入卡二期（fish 审批卡模板先行），长轮询机制零改动 |
 | /state | POST | idle/thinking/working/error（词表校验，400 拒绝） |
-| /action | POST | 一次性动画（celebrate）；记录 lastAction 见证三件套 |
+| /action | POST | 一次性动画（celebrate）；受理即写 lastAction 见证（v3 单对象：受理四字段 + 播完回填） |
 | /say | POST | 气泡文本（截断 200 字）；交互期间让位（见 §6 守卫） |
 | /interaction | POST | **长轮询**：响应头立即返回，正文 = 用户选择；断连 = 撤气泡 |
 
@@ -45,12 +45,13 @@ start-pet.cmd / restart-pet.cmd
 1. **头先发、正文延迟**：`Connection: close` + 无 content-length，正文由连接关闭定界——driver 的 fetch 立刻 resolve，正文等用户作答。
 2. **断连探测走 select()**：50ms 粒度探测 socket 可读（driver abort = FIN/RST → 可读 + EOF/错误 → `rfile.read(1)` 判定）。**不要用周期写失败探测**——1s keepalive 写的感知延迟就是双宠竞速里败者气泡的收回延迟（实测 60ms vs ≤1s）。
 3. **60s 心跳空格**：与断连探测**正交**的另一职责——喂 Node undici 的 300s bodyTimeout。没有它，提问挂 5 分钟以上（用户走开常态）driver 臂超时阵亡，答案写进死 socket 静默丢失。间隔常量 `INTERACTION_HEARTBEAT_SECONDS` 可 monkeypatch 测试。
+4. **/events 长轮询（v4 定稿待实施）**：同一套机制搬到事件队列——头先发 200、`select()` 断连探测照用；**无需心跳空格**：hold 钳 ≤30s、正文必有终点（30s < bodyTimeout 40s），与 /interaction 的本质差异是挂起时长有上界。**waiter 按端点分离**——driver 平时长挂 `/events?hold=30`，ask 流程期间 `/interaction` 并发再挂一条，单活跃位写法会让事件流和审批互相挤掉（七端点评审 P4 的落地点）。客户端预算：总超时 45s 仅保险丝（触发=故障）、retry=0；断连一律重走注册表+probeControlPlane，30s 周期探活补位冻死检测（忙轮询消失=隐性探活消失）。**chat 事件（10-31 定稿待实施）对机制零改动**：入队即可被现有 waiter 携出，仅事件体加 `type` 字段（缺省=touch）；输入卡侧保证旧 chat 未携出不收新输入（模态）。
 
 ### 契约对齐（与 TS 载体逐字段一致，driver 的 pet_state 工具原样透传 /status 给模型）
 
 - `animation` 报**文件名**（`.webm` 后缀）；`override` = 一次性动作覆盖（播完清 null）
-- `lastAction/lastActionAt/lastActionDone` 恒在场（null 起步）——`/action` 的可观察见证；`override` 单 tick 内可能设/清，**不是可靠见证**
-- `lastActionDone.durationMs` 在 one-shot finished 时填实际墙钟
+- `lastAction`（**v3 单对象** `{id, action, requestedBy, startedAt, durationMs, endedAt}`，原 `lastAction/lastActionAt/lastActionDone` 三件套合并）恒在场（无记录时整个字段 null）——`/action` 的可观察见证；`override` 单 tick 内可能设/清，**不是可靠见证**
+- v3 写入规则：受理即写 `id/action/requestedBy/startedAt`（`endedAt/durationMs=null`），one-shot finished **就地回填** `endedAt/durationMs`。现实现为三件套（迁移中）：`durationMs` 在 finished 时填实际墙钟，`at`=受理时刻——旧 `at` 是 startedAt 语义，迁移时映射到新 `startedAt` 而非 `endedAt`；`requestId/requestedBy` 为迁移新增（pure 的 /action 只来自控制面，`requestedBy` 恒 `tool`）
 
 ## 4. 渲染管线（pet/ 闭包核心）
 

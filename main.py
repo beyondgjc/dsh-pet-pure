@@ -83,7 +83,8 @@ class PetOperations(QObject, Operations):
     """GUI-thread operations: the HTTP layer calls, Qt signals deliver."""
 
     request_state = Signal(str)
-    request_action = Signal(str)
+    request_action = Signal(str, str)       # action, requestId（wait 关联键）
+    request_world = Signal(object, object)  # rect|None, (done Event, applied dict)
     request_say = Signal(str)
     interaction_present = Signal(str, str, object)
     interaction_cancel = Signal(str)
@@ -96,8 +97,11 @@ class PetOperations(QObject, Operations):
     def set_state(self, state: str) -> None:
         self.request_state.emit(state)
 
-    def perform(self, action: str) -> None:
-        self.request_action.emit(action)
+    def perform(self, action: str, request_id: str) -> None:
+        self.request_action.emit(action, request_id)
+
+    def set_world(self, rect: dict | None, done: "threading.Event", applied: dict) -> None:
+        self.request_world.emit(rect, (done, applied))
 
     def say(self, text: str) -> None:
         self.request_say.emit(text)
@@ -347,11 +351,8 @@ class PetWindow(QWidget):
         self.state = "idle"
         self._one_shot: str | None = None
         self._error_until = 0.0
-        # /action 的可观察见证（TS 载体同款字段，恒在场——条件缺席是
-        # JSON.stringify 的 undefined 陷阱）
-        self._last_action: str | None = None
-        self._last_action_at: int | None = None
-        self._last_action_done: dict | None = None
+        # §6 v3 动作见证单对象（恒在场——None=无记录，消费方 `=== null` 判定）
+        self._last_action_record: dict | None = None
         # 鼠标会话（旧 overlay 的 grab 协议）：按下=点击候选，过阈值才升级
         self._mouse_grab = False
         self._press_global: QPoint | None = None
@@ -392,6 +393,7 @@ class PetWindow(QWidget):
         ops = self.operations
         ops.request_state.connect(self._on_state)
         ops.request_action.connect(self._on_action)
+        ops.request_world.connect(self._on_world)
         ops.request_say.connect(self._on_say)
         ops.interaction_present.connect(self._on_interaction)
         ops.interaction_cancel.connect(self._on_cancel)
@@ -418,9 +420,12 @@ class PetWindow(QWidget):
         print(f"[pet-pure] animation not found: {name}", file=sys.stderr)
 
     def _on_one_shot_finished(self) -> None:
-        # 完成收据（TS 载体同款）：durationMs = 从推入到播完的实际墙钟
-        if self._last_action_done is not None and self._last_action_done["durationMs"] is None:
-            self._last_action_done["durationMs"] = int(time.time() * 1000) - self._last_action_done["at"]
+        # 完成收据（§6 v3）：就地回填 endedAt/durationMs，四字段一字不动——
+        # 按 id 轮询的消费方因此不怕中途改写。
+        record = self._last_action_record
+        if record is not None and record["endedAt"] is None:
+            record["endedAt"] = int(time.time() * 1000)
+            record["durationMs"] = record["endedAt"] - record["startedAt"]
         self._one_shot = None
         # 播完回落：语义状态回状态动画；idle 回行为链（tick 掷骰接管）
         if self.state != "idle":
@@ -443,14 +448,67 @@ class PetWindow(QWidget):
         else:
             self.play(STATE_ANIMATION[state])
 
-    def _on_action(self, action: str) -> None:
-        # /action 的可观察见证（TS 载体同款契约）：override 在单 tick 内可能
-        # 设/清，不是可靠见证——消费方轮询 lastAction/lastActionAt。
-        self._last_action = action
-        self._last_action_at = int(time.time() * 1000)
-        self._last_action_done = {"action": action, "durationMs": None, "at": self._last_action_at}
+    def _on_action(self, action: str, request_id: str) -> None:
+        # §6 v3 动作见证单对象：受理即写（id 与 /action 响应 requestId 同值，
+        # wait 关联键）；播完由 _on_one_shot_finished 就地回填。
+        now = int(time.time() * 1000)
+        self._last_action_record = {
+            "id": request_id,
+            "action": action,
+            "requestedBy": "tool",
+            "startedAt": now,
+            "durationMs": None,
+            "endedAt": None,
+        }
         if action == "celebrate":
             self.play(CELEBRATE_ANIMATION, one_shot=True)
+
+    def _on_world(self, rect: dict | None, payload: object) -> None:
+        """§6 /world：应用活动区（pure 的窗=区：矩形即窗口几何）。HTTP 线程
+        经 done Event 等应用完成、以 applied 回传 422 判定与 moved。"""
+        done, applied = payload
+        try:
+            screen = self.screen().availableGeometry() if self.screen() else None
+            if rect is None:
+                # reset：回落默认活动区（壳层配置缺省 900x560，回屏内锚点）
+                rect = {"x": 120, "y": 120, "width": 900, "height": 560}
+            if screen is not None and (
+                rect["x"] + rect["width"] <= screen.left() or rect["x"] >= screen.right()
+                or rect["y"] + rect["height"] <= screen.top() or rect["y"] >= screen.bottom()
+            ):
+                applied["error"] = "world 矩形与任何显示器工作区无交集"
+                return
+            width = max(ZONE_MIN_W, int(rect["width"]))
+            height = max(ZONE_MIN_H, int(rect["height"]))
+            old = self.geometry()
+            moved = (int(rect["x"]) != old.x() or int(rect["y"]) != old.y()
+                     or width != old.width() or height != old.height())
+            self.resize(width, height)
+            if screen is not None:
+                self.move(
+                    max(screen.left(), min(int(rect["x"]), screen.right() - self.width() + 1)),
+                    max(screen.top(), min(int(rect["y"]), screen.bottom() - self.height() + 1)))
+            self.sprite.set_bounds(QRect(0, 0, self.width(), self.height()))
+            self._persist_world(int(rect["x"]), int(rect["y"]), width, height)
+            applied["moved"] = moved
+            print(f"[pet-pure] /world applied: {int(rect['x'])},{int(rect['y'])} {width}x{height} moved={moved}")
+        except Exception as error:  # never strand the HTTP caller
+            applied["error"] = str(error)
+        finally:
+            done.set()
+
+    def _persist_world(self, x: int, y: int, width: int, height: int) -> None:
+        """world 写回 pet-pure.json（重启后恒以 /status.world 为准）。"""
+        config = getattr(self, "_shell_config", None)
+        path = getattr(self, "_shell_config_path", None)
+        if config is None or path is None:
+            return
+        config["zone_x"], config["zone_y"] = x, y
+        config["zone_width"], config["zone_height"] = width, height
+        try:
+            Path(path).write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except OSError as error:
+            print(f"[pet-pure] could not persist world: {error}", file=sys.stderr)
 
     def _place_bubble(self) -> None:
         """气泡跟随宠物：贴 sprite 头顶、水平对齐 sprite 中心，钳在屏内。
@@ -642,14 +700,34 @@ class PetWindow(QWidget):
         self._tray_toggle = menu.addAction("隐藏宠物" if self.isVisible() else "显示宠物")
         self._tray_toggle.triggered.connect(self._toggle_visible)
         act_summon = menu.addAction("召唤到屏幕中央")
+        act_chat = menu.addAction("和它说话")
         act_log = menu.addAction("打开日志文件夹")
         act_restart = menu.addAction("重启宠物")
         menu.addSeparator()
         act_quit = menu.addAction("退出")
         act_summon.triggered.connect(self._summon)
+        act_chat.triggered.connect(self._open_chat_input)
         act_log.triggered.connect(self._open_logs)
         act_restart.triggered.connect(lambda: os._exit(3))  # 无旗标硬退 → 监督 2s 重生
         act_quit.triggered.connect(self.close)
+
+    def _open_chat_input(self) -> None:
+        """chat 上行入口（§6 2026-10-31 修订）：文本入 /events 队列，driver
+        按 type 分派到内心戏会话，回复经 /say 回到气泡。每宠至多一条在途：
+        上一条未携出时拒绝并明说（契约的输入卡模态）。"""
+        from PySide6.QtWidgets import QInputDialog
+        control_state = getattr(self, "_control_state", None)
+        if control_state is None:
+            return
+        text, ok = QInputDialog.getMultiLineText(self, "和宠物说话", "想对它说什么：")
+        if not ok:
+            return
+        text = text.strip()
+        if text == "":
+            return
+        accepted, _seq = control_state.emit_chat(text)
+        if not accepted:
+            self._on_say("先等等，你上一句话我还没听完呢～")
 
     def _summon(self) -> None:
         """宠物游走/意外出屏时的找回：窗口回屏中央、sprite 回活动区中央。"""
@@ -720,14 +798,16 @@ class PetWindow(QWidget):
         if control_state is None:  # main() 接线完成前 tick 先到：静默跳过
             return
         geometry = self.geometry()
-        # window_facts 走 snapshot() 的合并通道；每 tick 直写（dict 换引用，
-        # HTTP 线程读到的是某一代完整值）。TS 载体的 /status 同样回报实况。
-        control_state.window_facts = {
+        # §6 v2：world_facts = 当前活动区（pure 窗=区，窗矩形即 world），
+        # 每 tick 直写（dict 换引用，HTTP 线程读到的是某一代完整值）。
+        control_state.world_facts = {
             "x": geometry.x(), "y": geometry.y(),
             "width": geometry.width(), "height": geometry.height(),
         }
         # 字段对齐 TS 载体的 /status（pet_state 工具原样透传给模型）：
-        # animation 报文件名（.webm 后缀），override = 一次性动作覆盖
+        # animation 报文件名（.webm 后缀），override = 一次性动作覆盖；
+        # location = 宠身包围盒（窗位置 + sprite 窗内偏移合成，§6 v2）。
+        sprite_rect = self.sprite.rect()
         animation = self.sprite._clip_name
         if getattr(self, "tray", None) is not None:
             self.tray.setToolTip(f"dsh-pet-pure: {self.state} / {animation}")
@@ -736,10 +816,14 @@ class PetWindow(QWidget):
             "state": self.state,
             "animation": f"{animation}.webm" if animation else animation,
             "override": f"{self._one_shot}.webm" if self._one_shot else None,
-            # TS 载体同款见证字段（恒在场）：/action 的可观察痕迹
-            "lastAction": self._last_action,
-            "lastActionAt": self._last_action_at,
-            "lastActionDone": self._last_action_done,
+            # §6 v3 见证单对象（恒定输出：None=null=无记录）
+            "lastAction": self._last_action_record,
+            "location": {
+                "x": geometry.x() + sprite_rect.x(),
+                "y": geometry.y() + sprite_rect.y(),
+                "width": sprite_rect.width(),
+                "height": sprite_rect.height(),
+            },
             "visible": self.isVisible(),
             "interaction": self._active_interaction is not None,
         })
@@ -1056,6 +1140,10 @@ def main() -> int:
 
     control_state = ControlState()
     window._control_state = control_state
+    # /world 持久化通道：应用活动区时写回 pet-pure.json（重启后恒以
+    # /status.world 为准）。
+    window._shell_config = shell_config
+    window._shell_config_path = config_path
     control_state.operations = window.operations
     server = http_control.serve(control_state, port=args.port)
     window._control_server = server
