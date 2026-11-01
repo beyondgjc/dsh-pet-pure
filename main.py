@@ -930,13 +930,13 @@ class PetWindow(QWidget):
 
     # -- lifecycle ---------------------------------------------------------
     def closeEvent(self, event) -> None:
-        if self._manifest_path is not None:
+        # 退出留痕：监督父进程看到旗标即不重生（用户主动退出的判定依据，
+        # 退出路径上的原生崩溃会让退出码非 0）。旗标路径显式传递——曾从
+        # registry_file.parent.parent 推导，注册表挪目录后层级变化让旗标
+        # 写错位置，监督者找不到 = 退出无限重生。
+        if getattr(self, "_exit_flag_path", None) is not None:
             try:
-                # 退出留痕：监督父进程看到旗标即不重生（用户主动退出的判定
-                # 依据，退出路径上的原生崩溃会让退出码非 0）。旗标放 home
-                # 根（注册表目录保持只有条目文件）。
-                self._manifest_path.parent.parent.joinpath(
-                    "pet-pure-exit.flag").write_text("quit", encoding="utf-8")
+                self._exit_flag_path.write_text("quit", encoding="utf-8")
             except OSError:
                 pass
         self.library.shutdown()
@@ -1046,7 +1046,9 @@ def main() -> int:
         "pet-http.json",
     ))
     home = anchor.parent
-    registry_file = home / "pet-http.d" / f"{args.pet_id}.json"
+    # 注册表目录收拢到 whale598/ 命名空间（防撞车）；旧 pet-http.d/ 由 driver
+    # 读回退覆盖（本文件改写后旧条目自然失效）。
+    registry_file = home / "whale598" / "pet-http.d" / f"{args.pet_id}.json"
     # 单实例接管（同 id）：注册表文件天然只含本 id 的 pid——旧实例活着
     # 就终止它（用户手动重启 = 换血，直觉正确）；别的 id 不动（多宠共存）。
     # **先杀旧监督者再杀旧真身**：监督者若活着，2s 内会重生真身，与本实例
@@ -1140,6 +1142,7 @@ def main() -> int:
 
     control_state = ControlState()
     window._control_state = control_state
+    window._exit_flag_path = exit_flag_path
     # /world 持久化通道：应用活动区时写回 pet-pure.json（重启后恒以
     # /status.world 为准）。
     window._shell_config = shell_config
